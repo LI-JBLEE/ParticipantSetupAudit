@@ -45,10 +45,11 @@ button {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 420px);
+  grid-template-columns: minmax(0, 1.8fr) minmax(220px, 260px);
   gap: 20px;
-  align-items: end;
-  padding: 24px;
+  align-items: center;
+  min-height: 132px;
+  padding: 18px 24px;
   border: 1px solid rgba(22, 50, 79, 0.18);
   border-radius: 8px;
   background:
@@ -58,7 +59,7 @@ button {
 }
 
 .hero h1 {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: clamp(32px, 4vw, 48px);
   line-height: 1;
 }
@@ -72,14 +73,14 @@ button {
 
 .hero-side {
   display: grid;
-  gap: 14px;
+  gap: 10px;
   justify-items: end;
 }
 
 .field {
   display: grid;
   gap: 8px;
-  width: 100%;
+  width: min(240px, 100%);
 }
 
 .field span {
@@ -96,7 +97,6 @@ button {
   background: rgba(255, 255, 255, 0.96);
 }
 
-.version-pill,
 .busy-pill {
   display: inline-flex;
   align-items: center;
@@ -450,6 +450,10 @@ tbody tr:nth-child(2n) td {
 
   .hero-side {
     justify-items: stretch;
+  }
+
+  .field {
+    width: 100%;
   }
 
   .section-head {

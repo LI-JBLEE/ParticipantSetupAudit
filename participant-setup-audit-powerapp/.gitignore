@@ -19,7 +19,7 @@ dist-ssr
 .power/
 .tmp-test/
 dev-home*.png
-edge-home.png
+edge-home*.png
 edge-dom.txt
 
 # Editor directories and files

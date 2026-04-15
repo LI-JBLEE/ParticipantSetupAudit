@@ -18,8 +18,6 @@ import {
 } from "./lib/engine";
 import type { AppData, AuditRow, FilterOptions, Filters, UploadDefinition, UploadStatus } from "./lib/types";
 
-const APP_VERSION = "0.1";
-
 const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "auditItem", label: "Audit Item" },
   { key: "employeeId", label: "Employee ID" },
@@ -265,9 +263,6 @@ function App() {
       <header className="hero">
         <div>
           <h1>Participant Setup Audit</h1>
-          <p className="hero-copy">
-            Upload the required source files, choose the processing month, apply global filters, and generate the audit report entirely in the browser.
-          </p>
         </div>
         <div className="hero-side">
           <label className="field">
@@ -280,7 +275,6 @@ function App() {
               ))}
             </select>
           </label>
-          <div className="version-pill">UI {APP_VERSION}</div>
         </div>
       </header>
 
@@ -299,7 +293,6 @@ function App() {
             <div className="section-head">
               <div>
                 <h2>1. Upload Files</h2>
-                <p>All processing stays in the front end. Placeholder employee IDs with letters are ignored automatically.</p>
               </div>
               <div className={isBusy ? "busy-pill is-busy" : "busy-pill"}>{isBusy ? "Parsing..." : "Ready"}</div>
             </div>
@@ -320,7 +313,6 @@ function App() {
             <div className="section-head">
               <div>
                 <h2>2. Global Filters</h2>
-                <p>Region uses the Country Region Mapping reference, and Country options update dynamically from the selected Region values.</p>
               </div>
               <button className="primary-button" disabled={!isReadyToGenerate} onClick={generateReport}>
                 Generate Report
@@ -384,7 +376,6 @@ function App() {
             <div className="section-head">
               <div>
                 <h2>3. Audit Results</h2>
-                <p>{rows.length > 0 ? `${rows.length.toLocaleString()} audit rows generated.` : "Run the report after all files are uploaded."}</p>
               </div>
               <button className="secondary-button" disabled={!downloadBlob} onClick={downloadWorkbook}>
                 Download Excel
