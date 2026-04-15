@@ -1,5 +1,6 @@
 import XLSXImport from "xlsx-js-style";
 import type { ColInfo, WorkBook, WorkSheet } from "xlsx-js-style";
+import { DEFAULT_COUNTRY_REGION_MAP } from "./countryRegionMap";
 import type {
   AppData,
   AuditBuildResult,
@@ -65,13 +66,11 @@ export function buildProcessingMonthOptions(today = new Date()): ProcessingMonth
 }
 
 export async function loadCountryRegionReferenceMap(): Promise<Record<string, string>> {
-  const buffer = await fetchDefaultFile("Country Region Mapping.xlsx");
-  return parseCountryRegionWorkbook(normalizeWorkbookRanges(XLSX.read(buffer, { type: "array", cellDates: false })));
+  return { ...DEFAULT_COUNTRY_REGION_MAP };
 }
 
 export function buildFilterOptions(data: AppData, countryToRegion: Record<string, string>): FilterOptions {
   const regionSet = new Set<string>();
-  const lobSet = new Set<string>();
   const countrySet = new Set<string>();
 
   const ids = new Set<string>([
@@ -84,7 +83,6 @@ export function buildFilterOptions(data: AppData, countryToRegion: Record<string
   for (const employeeId of ids) {
     const context = resolveEmployeeContext(employeeId, data, countryToRegion);
     regionSet.add(context.region);
-    lobSet.add(context.lob);
   }
 
   for (const record of Object.values(data.currentScrById)) {
@@ -95,7 +93,7 @@ export function buildFilterOptions(data: AppData, countryToRegion: Record<string
 
   return {
     regions: REGION_OPTIONS,
-    lobs: sortDisplayValues(lobSet),
+    lobs: collectScrLobOptions(data),
     countries: sortDisplayValues(countrySet),
   };
 }
@@ -709,7 +707,7 @@ function createAuditRow(
     okrEndMonth: "",
     transferDirection: "",
     microsoftTransfer: "",
-    uploadDate: context.uploadDate,
+    peopleUploadDate: context.peopleUploadDate,
     ...restValues,
   };
 }
@@ -723,7 +721,7 @@ interface ResolvedContext {
   peopleBusinessUnit: string;
   analystName: string;
   planType: string;
-  uploadDate: string;
+  peopleUploadDate: string;
 }
 
 function resolveEmployeeContext(employeeId: string, data: AppData, countryToRegion: Record<string, string>): ResolvedContext {
@@ -738,7 +736,7 @@ function resolveEmployeeContext(employeeId: string, data: AppData, countryToRegi
   const mappedScrRegion = scrCountry ? normalizeRegionValue(countryToRegion[scrCountry.toLowerCase()] ?? "") : "";
   const peopleRegion = normalizeRegionValue(people?.region ?? "");
   const region = displayOrUnmapped(mappedScrRegion || peopleRegion || normalizeRegionValue(loa?.region ?? "") || normalizeRegionValue(msft?.region ?? ""));
-  const lob = displayOrUnmapped(current?.businessUnit || previous?.businessUnit || people?.businessUnit || "");
+  const lob = displayOrUnmapped(current?.businessUnit || previous?.businessUnit || "");
 
   return {
     name: current?.fullName || previous?.fullName || people?.fullName || employeeId,
@@ -749,7 +747,7 @@ function resolveEmployeeContext(employeeId: string, data: AppData, countryToRegi
     peopleBusinessUnit: people?.businessUnit ?? "",
     analystName: people?.analystName ?? "",
     planType: people?.planType ?? "",
-    uploadDate: formatDate(people?.uploadDate ?? null),
+    peopleUploadDate: formatDate(people?.uploadDate ?? null),
   };
 }
 
@@ -835,6 +833,17 @@ function pickPreferredLoaRecord(previous: LoaRecord | undefined, candidate: LoaR
 
 function sortDisplayValues(values: Set<string>): string[] {
   return [...values].filter(Boolean).sort((left, right) => left.localeCompare(right));
+}
+
+function collectScrLobOptions(data: AppData): string[] {
+  const lobSet = new Set<string>();
+  for (const record of Object.values(data.currentScrById)) {
+    if (record.businessUnit && record.businessUnit !== "Unmapped") lobSet.add(record.businessUnit);
+  }
+  for (const record of Object.values(data.previousScrById)) {
+    if (record.businessUnit && record.businessUnit !== "Unmapped") lobSet.add(record.businessUnit);
+  }
+  return sortDisplayValues(lobSet);
 }
 
 function intersectKeys<T>(left: Record<string, T>, right: Record<string, T>): string[] {
@@ -1000,46 +1009,6 @@ function toNumber(value: unknown): number | null {
   if (!normalized) return null;
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-async function fetchDefaultFile(fileName: string): Promise<ArrayBuffer> {
-  const encoded = encodeURI(fileName);
-  const baseUrl = normalizeBaseUrl(import.meta.env.BASE_URL);
-  const candidatePaths = [
-    `defaults/${encoded}`,
-    `./defaults/${encoded}`,
-    `/defaults/${encoded}`,
-    `${baseUrl}defaults/${encoded}`,
-  ];
-
-  for (const filePath of candidatePaths) {
-    try {
-      const response = await fetch(filePath);
-      if (response.ok) return await response.arrayBuffer();
-    } catch {
-      // try the next path
-    }
-  }
-
-  throw new Error(`Could not load local reference file: ${fileName}`);
-}
-
-function parseCountryRegionWorkbook(workbook: WorkBook): Record<string, string> {
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return XLSX.utils
-    .sheet_to_json<Record<string, unknown>>(sheet, { defval: null })
-    .reduce<Record<string, string>>((acc, row) => {
-      const country = text(row.Country).toLowerCase();
-      const region = normalizeRegionValue(text(row.Region));
-      if (country && region) acc[country] = region;
-      return acc;
-    }, {});
-}
-
-function normalizeBaseUrl(value: unknown): string {
-  const raw = typeof value === "string" ? value : "/";
-  const normalized = raw.trim() || "/";
-  return normalized.endsWith("/") ? normalized : `${normalized}/`;
 }
 
 function normalizeRegionValue(value: string): string {

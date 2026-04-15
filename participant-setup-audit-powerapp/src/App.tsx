@@ -53,7 +53,7 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "okrEndMonth", label: "OKR End Month" },
   { key: "transferDirection", label: "Transfer Direction" },
   { key: "microsoftTransfer", label: "Microsoft Transfer" },
-  { key: "uploadDate", label: "Upload_Date" },
+  { key: "peopleUploadDate", label: "peopleUploadDate" },
 ];
 
 type UploadKey = UploadDefinition["key"];
@@ -258,10 +258,25 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  function resetApp(): void {
+    setActiveTab("audit");
+    setData(createEmptyAppData());
+    setUploadStatuses({});
+    setIsBusy(false);
+    setErrors([]);
+    setWarnings([]);
+    setRows([]);
+    setDownloadBlob(null);
+    setDownloadName("");
+    setProcessingMonth(processingMonthOptions[0]?.label ?? "");
+    setFilters({ regions: [], lobs: [], countries: [] });
+    setFiltersTouched(false);
+  }
+
   return (
     <div className="app-shell">
       <header className="hero">
-        <div>
+        <div className="hero-title">
           <h1>Participant Setup Audit</h1>
         </div>
         <div className="hero-side">
@@ -275,6 +290,9 @@ function App() {
               ))}
             </select>
           </label>
+          <button className="secondary-button hero-reset-button" disabled={isBusy} onClick={resetApp}>
+            Reset
+          </button>
         </div>
       </header>
 
@@ -377,7 +395,7 @@ function App() {
               <div>
                 <h2>3. Audit Results</h2>
               </div>
-              <button className="secondary-button" disabled={!downloadBlob} onClick={downloadWorkbook}>
+              <button className="primary-button" disabled={!downloadBlob} onClick={downloadWorkbook}>
                 Download Excel
               </button>
             </div>

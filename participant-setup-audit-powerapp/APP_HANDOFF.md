@@ -193,9 +193,9 @@ LOB resolution order:
 
 1. Current month SCR `Business Unit`
 2. Previous month SCR `Business Unit`
-3. People `Business_Unit`
 
-Filter options are built from resolved employee context.
+Global filter LOB options are built only from SCR `Business Unit` values.
+People `Business_Unit` is not used for the LOB filter.
 
 ### Country
 
@@ -296,7 +296,7 @@ Important output decisions:
 
 - `changeSummary` is placed immediately after `Country`
 - `peoplePlanEffectiveDate` is placed immediately after `changeSummary`
-- `Upload_Date` is the last column
+- `peopleUploadDate` is the last column
 - `Note` column was removed
 - Any former note text is merged into `changeSummary`
 
@@ -305,7 +305,7 @@ People-driven fields:
 - `peoplePlanEffectiveDate` comes from People `Plan_Effective_Date`
 - `peopleBusinessUnit` comes from People `Business_Unit`
 - `analystName` comes from People `Analyst_Name`
-- `uploadDate` comes from People `Upload_Date`
+- `peopleUploadDate` comes from People `Upload_Date`
 
 If the employee does not exist in People:
 
@@ -407,4 +407,3 @@ When making future changes:
 3. If logic changed, run a sample-data smoke test with `npx tsx -`
 4. If UI changed, capture a fresh browser screenshot
 5. Update this document if business rules or output columns changed
-

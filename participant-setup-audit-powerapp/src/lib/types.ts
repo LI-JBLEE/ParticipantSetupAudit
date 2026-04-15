@@ -157,7 +157,7 @@ export interface AuditRow {
   okrEndMonth: string;
   transferDirection: string;
   microsoftTransfer: string;
-  uploadDate: string;
+  peopleUploadDate: string;
 }
 
 export interface AuditBuildResult {

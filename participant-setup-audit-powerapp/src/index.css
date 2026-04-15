@@ -44,9 +44,9 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1.8fr) minmax(220px, 260px);
   gap: 20px;
-  align-items: center;
-  min-height: 92px;
-  padding: 14px 20px;
+  align-items: end;
+  min-height: 0;
+  padding: 10px 20px 8px;
   border: 1px solid #e5e7eb;
   border-bottom: none;
   border-radius: 12px 12px 0 0;
@@ -61,15 +61,28 @@ button {
   color: #111827;
 }
 
+.hero-title {
+  align-self: center;
+}
+
 .hero-side {
   display: grid;
-  gap: 10px;
+  gap: 4px;
+  align-content: start;
   justify-items: end;
+}
+
+.hero-reset-button {
+  width: auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  justify-self: end;
 }
 
 .field {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   width: min(220px, 100%);
 }
 
@@ -81,8 +94,8 @@ button {
 
 .field select {
   width: 100%;
-  min-height: 40px;
-  padding: 8px 12px;
+  min-height: 36px;
+  padding: 6px 12px;
   border: 1px solid #d1d5db;
   border-radius: 8px;
   background: #fff;
@@ -121,8 +134,8 @@ button {
 }
 
 .tab {
-  min-height: 48px;
-  padding: 0 16px;
+  min-height: 34px;
+  padding: 0 14px;
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
