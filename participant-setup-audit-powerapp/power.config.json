@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "appId": "00000000-0000-0000-0000-000000000000",
+  "appDisplayName": "Participant Setup Audit",
+  "region": "prod",
+  "environmentId": "8c0f0998-b44d-e8f1-b0b8-97534410a116",
+  "description": "Client-side Participant Setup Audit app",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:5173",
+  "logoPath": "Default",
+  "connectionReferences": {},
+  "databaseReferences": {}
+}
