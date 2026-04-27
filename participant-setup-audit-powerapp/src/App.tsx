@@ -37,6 +37,8 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "terminationDate", label: "Termination Date" },
   { key: "rehireInPeople", label: "Rehire in People" },
   { key: "negativeBalance", label: "Negative Balance" },
+  { key: "missingPeopleSetup", label: "Missing People Setup" },
+  { key: "missingPositionSetup", label: "Missing Position Setup" },
   { key: "previousJobTitle", label: "Previous Job Title" },
   { key: "currentJobTitle", label: "Current Job Title" },
   { key: "previousSupervisoryManager", label: "Previous Supervisory Manager" },

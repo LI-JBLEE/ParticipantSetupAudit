@@ -1,8 +1,8 @@
 # Participant Setup Audit - App Handoff
 
-Last updated: 2026-04-15
+Last updated: 2026-04-27
 
-Latest app change commit: `008ca1`
+Latest committed app change commit: `008ca1`
 
 ## 1. App purpose
 
@@ -252,6 +252,30 @@ Important note:
 - The app still checks `OTE (Base+Comm)` changes for `changeSummary`.
 - However, the `previousOteBaseComm` and `currentOteBaseComm` output columns were removed from the report.
 
+### Deferred Change While on LOA
+
+Rule:
+
+- Same compared fields as `Change to Existing Participant`
+- Used instead of `Change to Existing Participant` when current month SCR `On Leave = Yes`
+- `changeSummary` is still prefixed with `[Currently on LOA]`
+
+Purpose:
+
+- Changes found while the employee is on LOA may need to be held until the employee returns from LOA.
+
+### Missing Xactly Setup
+
+Rule:
+
+- Current month SCR `Active Status = Yes`
+- Employee is missing from either the People file or the Position file
+
+Output behavior:
+
+- `missingPeopleSetup` shows whether the People record is missing
+- `missingPositionSetup` shows whether the Position record is missing
+
 ### LOA Start / LOA Return
 
 Rule:
@@ -291,6 +315,36 @@ Rule:
 - Current SCR exists but no longer active
 - Also flags whether employee exists in Transfer to MSFT file
 
+### Negative Balance Risk
+
+Rule:
+
+- Employee is included in one of these audit items:
+  - `New Hire`
+  - `Transfer to Non-Sales`
+  - `Transfer to Sales`
+  - `Termination`
+- Payment Balance has a material negative balance
+
+Current materiality threshold:
+
+- Absolute negative balance amount must be at least `1`
+
+Output behavior:
+
+- If the employee has a SCR termination date, it is shown in the `terminationDate` output column.
+
+### Unmapped Data Warning
+
+Rule:
+
+- Employee is in the active current SCR population, active previous SCR population, or an OKR Plan End candidate
+- Resolved Region, LOB, or Country is `Unmapped`, or the SCR country is missing from the country-region map
+
+Important behavior:
+
+- These warning rows bypass the global filters so unmapped source data does not disappear silently.
+
 ## 11. Output report design
 
 Current visible output columns are defined in [App.tsx](/c:/Codex/PowerApps/Participant%20Setup%20Audit/participant-setup-audit-powerapp/src/App.tsx#L23).
@@ -300,6 +354,7 @@ Important output decisions:
 - Current month SCR `Active Status`, `On Leave`, and `First Day of Leave` are placed immediately after `Country`
 - `changeSummary` is placed immediately after the current month SCR LOA context columns
 - If current month SCR `On Leave = Yes`, `changeSummary` is prefixed with `[Currently on LOA]`
+- `missingPeopleSetup` and `missingPositionSetup` show People/Position setup gaps for `Missing Xactly Setup`
 - `peoplePlanEffectiveDate` is placed immediately after `changeSummary`
 - `peopleUploadDate` is the last column
 - `Note` column was removed

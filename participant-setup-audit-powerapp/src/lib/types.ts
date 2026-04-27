@@ -142,6 +142,8 @@ export interface AuditRow {
   terminationDate: string;
   rehireInPeople: string;
   negativeBalance: string;
+  missingPeopleSetup: string;
+  missingPositionSetup: string;
   previousJobTitle: string;
   currentJobTitle: string;
   previousSupervisoryManager: string;
