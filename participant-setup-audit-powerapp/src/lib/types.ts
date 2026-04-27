@@ -76,6 +76,7 @@ export interface ScrRecord {
   originalHireDate: Date | null;
   activeStatus: string;
   onLeave: string;
+  firstDayOfLeave: Date | null;
   hireDate: Date | null;
   isRehire: string;
   terminationDate: Date | null;
@@ -129,6 +130,9 @@ export interface AuditRow {
   region: string;
   lob: string;
   country: string;
+  currentActiveStatus: string;
+  currentOnLeave: string;
+  currentFirstDayOfLeave: string;
   changeSummary: string;
   peoplePlanEffectiveDate: string;
   peopleBusinessUnit: string;

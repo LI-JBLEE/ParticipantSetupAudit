@@ -65,6 +65,13 @@ button {
   align-self: center;
 }
 
+.app-version {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .hero-side {
   display: grid;
   gap: 4px;

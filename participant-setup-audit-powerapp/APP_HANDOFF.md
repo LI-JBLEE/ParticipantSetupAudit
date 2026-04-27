@@ -138,6 +138,7 @@ Important extracted fields:
 - `Is Rehire`
 - `Active Status`
 - `On Leave`
+- `First Day of Leave`
 - `Termination Date`
 - `Job Title`
 - `Supervisory Manager`
@@ -294,7 +295,9 @@ Current visible output columns are defined in [App.tsx](/c:/Codex/PowerApps/Part
 
 Important output decisions:
 
-- `changeSummary` is placed immediately after `Country`
+- Current month SCR `Active Status`, `On Leave`, and `First Day of Leave` are placed immediately after `Country`
+- `changeSummary` is placed immediately after the current month SCR LOA context columns
+- If current month SCR `On Leave = Yes`, `changeSummary` is prefixed with `[Currently on LOA]`
 - `peoplePlanEffectiveDate` is placed immediately after `changeSummary`
 - `peopleUploadDate` is the last column
 - `Note` column was removed

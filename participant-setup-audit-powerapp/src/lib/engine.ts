@@ -24,6 +24,7 @@ const XLSX = ((XLSXImport as unknown as { default?: typeof XLSXImport }).default
 
 const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 const REGION_OPTIONS = ["APAC", "EMEA", "LATAM", "NAMER"];
+const CURRENTLY_ON_LOA_PREFIX = "[Currently on LOA]";
 
 const REQUIRED_UPLOADS: UploadDefinition[] = [
   { key: "currentScr", label: "Sales Compensation Report (Current Month)", accept: ".xlsx,.xls" },
@@ -327,6 +328,7 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
     originalHireDate: findExactColumn(header, ["originalhiredate"], ["originalhiredate"]),
     activeStatus: findColumn(header, ["activestatus"]),
     onLeave: findColumn(header, ["onleave"]),
+    firstDayOfLeave: findColumn(header, ["firstdayofleave"]),
     hireDate: findExactColumn(header, ["hiredate"], ["hiredate"]),
     isRehire: findExactColumn(header, ["isrehire"], ["isrehire"]),
     terminationDate: findColumn(header, ["terminationdate"]),
@@ -357,6 +359,7 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
       originalHireDate: toDate(cell(row, cols.originalHireDate)),
       activeStatus: text(cell(row, cols.activeStatus)),
       onLeave: text(cell(row, cols.onLeave)),
+      firstDayOfLeave: toDate(cell(row, cols.firstDayOfLeave)),
       hireDate: toDate(cell(row, cols.hireDate)),
       isRehire: text(cell(row, cols.isRehire)),
       terminationDate: toDate(cell(row, cols.terminationDate)),
@@ -671,6 +674,9 @@ function createAuditRow(
 ): AuditRow {
   const { changeSummary, notes, ...restValues } = values;
   const mergedChangeSummary = combineSummaryParts(changeSummary ?? "", notes ?? "");
+  const displayedChangeSummary = isYes(context.currentOnLeave)
+    ? prefixChangeSummary(CURRENTLY_ON_LOA_PREFIX, mergedChangeSummary)
+    : mergedChangeSummary;
   return {
     auditItem,
     processingMonth,
@@ -679,7 +685,10 @@ function createAuditRow(
     region: context.region,
     lob: context.lob,
     country: context.country,
-    changeSummary: mergedChangeSummary,
+    currentActiveStatus: context.currentActiveStatus,
+    currentOnLeave: context.currentOnLeave,
+    currentFirstDayOfLeave: context.currentFirstDayOfLeave,
+    changeSummary: displayedChangeSummary,
     peoplePlanEffectiveDate: context.peoplePlanEffectiveDate,
     peopleBusinessUnit: context.peopleBusinessUnit,
     analystName: context.analystName,
@@ -722,6 +731,9 @@ interface ResolvedContext {
   analystName: string;
   planType: string;
   peopleUploadDate: string;
+  currentActiveStatus: string;
+  currentOnLeave: string;
+  currentFirstDayOfLeave: string;
 }
 
 function resolveEmployeeContext(employeeId: string, data: AppData, countryToRegion: Record<string, string>): ResolvedContext {
@@ -748,6 +760,9 @@ function resolveEmployeeContext(employeeId: string, data: AppData, countryToRegi
     analystName: people?.analystName ?? "",
     planType: people?.planType ?? "",
     peopleUploadDate: formatDate(people?.uploadDate ?? null),
+    currentActiveStatus: current?.activeStatus ?? "",
+    currentOnLeave: current?.onLeave ?? "",
+    currentFirstDayOfLeave: formatDate(current?.firstDayOfLeave ?? null),
   };
 }
 
@@ -804,6 +819,13 @@ function numericCell(value: number | null): number | "" {
 function combineSummaryParts(...parts: string[]): string {
   const cleaned = parts.map((part) => part.trim()).filter(Boolean);
   return [...new Set(cleaned)].join(" | ");
+}
+
+function prefixChangeSummary(prefix: string, summary: string): string {
+  const trimmed = summary.trim();
+  if (!trimmed) return prefix;
+  if (trimmed.startsWith(prefix)) return trimmed;
+  return `${prefix} ${trimmed}`;
 }
 
 function pickLatestPeopleRecord(previous: PeopleRecord | undefined, candidate: PeopleRecord): PeopleRecord {

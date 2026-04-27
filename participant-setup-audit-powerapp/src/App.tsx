@@ -25,6 +25,9 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "region", label: "Region" },
   { key: "lob", label: "LOB" },
   { key: "country", label: "Country" },
+  { key: "currentActiveStatus", label: "Active Status" },
+  { key: "currentOnLeave", label: "On Leave" },
+  { key: "currentFirstDayOfLeave", label: "First Day of Leave" },
   { key: "changeSummary", label: "Change Summary" },
   { key: "peoplePlanEffectiveDate", label: "People Plan Effective Date" },
   { key: "peopleBusinessUnit", label: "People Business Unit" },
@@ -278,6 +281,7 @@ function App() {
       <header className="hero">
         <div className="hero-title">
           <h1>Participant Setup Audit</h1>
+          <p className="app-version">Version 1.0</p>
         </div>
         <div className="hero-side">
           <label className="field">
