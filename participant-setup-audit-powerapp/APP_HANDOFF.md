@@ -2,6 +2,8 @@
 
 Last updated: 2026-04-15
 
+Latest app change commit: `008ca1`
+
 ## 1. App purpose
 
 This app generates a `Participant Setup Audit` report entirely in the browser.
