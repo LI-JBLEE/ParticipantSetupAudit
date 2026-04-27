@@ -429,7 +429,6 @@ export function buildAuditReport(
   const transferInCutoff = new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth(), 15);
   const warnings: string[] = [];
   const rows: AuditRow[] = [];
-  const negativeBalanceRiskIds = new Set<string>();
 
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
@@ -442,7 +441,7 @@ export function buildAuditReport(
     const balance = data.balanceById[current.employeeId];
     const missingPeople = !people;
     const missingPosition = !position;
-    if (balance && hasMaterialNegativeBalance(balance)) negativeBalanceRiskIds.add(current.employeeId);
+    const materialNegativeBalance = people && balance ? formatMaterialNegativeBalance(balance) : "";
     rows.push(
       createAuditRow("New Hire", processingMonth, current.employeeId, current.fullName || context.name, context, {
         hireDate: formatDate(current.hireDate),
@@ -454,8 +453,8 @@ export function buildAuditReport(
         rehireInPeople: people ? "Yes" : "No",
         missingPeopleSetup: missingPeople ? "Yes" : "No",
         missingPositionSetup: missingPosition ? "Yes" : "No",
-        negativeBalance: people && balance ? formatNegativeBalance(balance) : "",
-        changeSummary: buildNewHireSummary(Boolean(people), Boolean(balance), missingPeople, missingPosition),
+        negativeBalance: materialNegativeBalance,
+        changeSummary: buildNewHireSummary(Boolean(people), Boolean(materialNegativeBalance), missingPeople, missingPosition),
       }),
     );
   }
@@ -577,13 +576,13 @@ export function buildAuditReport(
       const context = resolveEmployeeContext(employeeId, data, countryToRegion);
       if (!matchesFilters(context, filters)) continue;
       const balance = data.balanceById[employeeId];
-      if (balance && hasMaterialNegativeBalance(balance)) negativeBalanceRiskIds.add(employeeId);
       rows.push(
         createAuditRow("Transfer to Non-Sales", processingMonth, employeeId, previous.fullName || context.name, context, {
           transferDirection: "Sales to Non-Sales",
           previousJobTitle: previous.jobTitle,
           previousBusinessUnit: previous.businessUnit,
           previousCountry: previous.country,
+          negativeBalance: balance ? formatMaterialNegativeBalance(balance) : "",
           changeSummary: "Active in the previous month SCR but missing from the current month SCR.",
         }),
       );
@@ -597,7 +596,6 @@ export function buildAuditReport(
     const context = resolveEmployeeContext(employeeId, data, countryToRegion);
     if (!matchesFilters(context, filters)) continue;
     const balance = data.balanceById[employeeId];
-    if (balance && hasMaterialNegativeBalance(balance)) negativeBalanceRiskIds.add(employeeId);
     rows.push(
       createAuditRow("Transfer to Sales", processingMonth, employeeId, current.fullName || context.name, context, {
         transferDirection: "Non-Sales to Sales",
@@ -605,6 +603,7 @@ export function buildAuditReport(
         currentJobTitle: current.jobTitle,
         currentBusinessUnit: current.businessUnit,
         currentCountry: current.country,
+        negativeBalance: balance ? formatMaterialNegativeBalance(balance) : "",
         changeSummary:
           "Active in the current month SCR, not present in the previous month SCR, and hire date is earlier than the previous month 15th.",
       }),
@@ -619,27 +618,12 @@ export function buildAuditReport(
     if (!matchesFilters(context, filters)) continue;
     const transfer = data.msftTransferById[employeeId];
     const balance = data.balanceById[employeeId];
-    if (balance && hasMaterialNegativeBalance(balance)) negativeBalanceRiskIds.add(employeeId);
     rows.push(
       createAuditRow("Termination", processingMonth, employeeId, current.fullName || previous.fullName || context.name, context, {
         terminationDate: formatDate(current.terminationDate ?? previous.terminationDate),
         microsoftTransfer: transfer ? "Yes" : "No",
+        negativeBalance: balance ? formatMaterialNegativeBalance(balance) : "",
         changeSummary: transfer ? "Employee also appears in the Transfer to MSFT file." : "",
-      }),
-    );
-  }
-
-  for (const employeeId of negativeBalanceRiskIds) {
-    const balance = data.balanceById[employeeId];
-    if (!balance) continue;
-    const context = resolveEmployeeContext(employeeId, data, countryToRegion);
-    const current = data.currentScrById[employeeId];
-    const previous = data.previousScrById[employeeId];
-    rows.push(
-      createAuditRow("Negative Balance Risk", processingMonth, employeeId, context.name, context, {
-        terminationDate: formatDate(current?.terminationDate ?? previous?.terminationDate ?? null),
-        negativeBalance: formatMaterialNegativeBalance(balance),
-        changeSummary: `Material negative payment balance at or above ${NEGATIVE_BALANCE_MATERIALITY_THRESHOLD}.`,
       }),
     );
   }
@@ -949,19 +933,6 @@ function buildNewHireSummary(
     parts.push(`New hire pending Xactly setup: missing ${missing.join(" and ")}.`);
   }
   return combineSummaryParts(...parts);
-}
-
-function formatNegativeBalance(summary: BalanceSummary): string {
-  return Object.entries(summary.negativeTotalByCurrency)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([currency, amount]) => `${currency} ${formatNumber(amount)}`)
-    .join("; ");
-}
-
-function hasMaterialNegativeBalance(summary: BalanceSummary): boolean {
-  return Object.values(summary.negativeTotalByCurrency).some(
-    (amount) => amount < 0 && Math.abs(amount) >= NEGATIVE_BALANCE_MATERIALITY_THRESHOLD,
-  );
 }
 
 function formatMaterialNegativeBalance(summary: BalanceSummary): string {

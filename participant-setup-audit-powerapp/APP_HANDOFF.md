@@ -317,24 +317,20 @@ Rule:
 - Current SCR exists but no longer active
 - Also flags whether employee exists in Transfer to MSFT file
 
-### Negative Balance Risk
+### Negative balance output
 
-Rule:
+Behavior:
 
-- Employee is included in one of these audit items:
+- Material negative balances are shown in the `negativeBalance` output column for these audit items:
   - `New Hire`
   - `Transfer to Non-Sales`
   - `Transfer to Sales`
   - `Termination`
-- Payment Balance has a material negative balance
+- No separate `Negative Balance Risk` audit item is generated.
 
 Current materiality threshold:
 
 - Absolute negative balance amount must be at least `1`
-
-Output behavior:
-
-- If the employee has a SCR termination date, it is shown in the `terminationDate` output column.
 
 ### Unmapped Data Warning
 
