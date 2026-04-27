@@ -223,6 +223,7 @@ Rule:
 
 - `Active Status = Yes`
 - `Hire Date` between previous month 16th and selected month 15th
+- If People or Position setup is missing for a new hire, the New Hire row shows `missingPeopleSetup` and/or `missingPositionSetup` instead of creating a separate `Missing Xactly Setup` row.
 
 Rehire rule:
 
@@ -270,6 +271,7 @@ Rule:
 
 - Current month SCR `Active Status = Yes`
 - Employee is missing from either the People file or the Position file
+- Employees inside the selected processing month's New Hire window are excluded from this audit item to avoid flagging normal pending new-hire setup.
 
 Output behavior:
 

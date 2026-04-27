@@ -434,11 +434,14 @@ export function buildAuditReport(
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
     if (current.terminationDate && !isRehireNewHire(current)) continue;
-    if (!current.hireDate || current.hireDate < newHireStart || current.hireDate > newHireEnd) continue;
+    if (!isNewHireInProcessingWindow(current, newHireStart, newHireEnd)) continue;
     const context = resolveEmployeeContext(current.employeeId, data, countryToRegion);
     if (!matchesFilters(context, filters)) continue;
     const people = data.peopleById[current.employeeId];
+    const position = data.positionById[current.employeeId];
     const balance = data.balanceById[current.employeeId];
+    const missingPeople = !people;
+    const missingPosition = !position;
     if (balance && hasMaterialNegativeBalance(balance)) negativeBalanceRiskIds.add(current.employeeId);
     rows.push(
       createAuditRow("New Hire", processingMonth, current.employeeId, current.fullName || context.name, context, {
@@ -449,18 +452,17 @@ export function buildAuditReport(
         currentCurrency: current.currency,
         currentCommissionAmount: numericCell(current.commissionAmount),
         rehireInPeople: people ? "Yes" : "No",
+        missingPeopleSetup: missingPeople ? "Yes" : "No",
+        missingPositionSetup: missingPosition ? "Yes" : "No",
         negativeBalance: people && balance ? formatNegativeBalance(balance) : "",
-        changeSummary: people
-          ? balance
-            ? "Employee exists in People and has a negative payment balance."
-            : "Employee exists in People."
-          : "",
+        changeSummary: buildNewHireSummary(Boolean(people), Boolean(balance), missingPeople, missingPosition),
       }),
     );
   }
 
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
+    if (isNewHireInProcessingWindow(current, newHireStart, newHireEnd)) continue;
     const missingPeople = !data.peopleById[current.employeeId];
     const missingPosition = !data.positionById[current.employeeId];
     if (!missingPeople && !missingPosition) continue;
@@ -910,6 +912,10 @@ function compareField(label: string, previous: unknown, current: unknown): { lab
   return { label, changed: normalizeText(previous) !== normalizeText(current) };
 }
 
+function isNewHireInProcessingWindow(record: ScrRecord, startDate: Date, endDate: Date): boolean {
+  return Boolean(record.hireDate && record.hireDate >= startDate && record.hireDate <= endDate);
+}
+
 function isRehireNewHire(record: ScrRecord): boolean {
   return isYes(record.isRehire) && Boolean(record.originalHireDate && record.hireDate && record.originalHireDate < record.hireDate);
 }
@@ -924,6 +930,25 @@ function buildMissingXactlySetupSummary(missingPeople: boolean, missingPosition:
     missingPosition ? "Position" : "",
   ].filter(Boolean);
   return `Employee is active in the current month SCR but missing from ${missing.join(" and ")}.`;
+}
+
+function buildNewHireSummary(
+  hasPeopleRecord: boolean,
+  hasNegativeBalance: boolean,
+  missingPeople: boolean,
+  missingPosition: boolean,
+): string {
+  const parts: string[] = [];
+  if (hasPeopleRecord) parts.push("Employee exists in People.");
+  if (hasNegativeBalance) parts.push("Employee has a negative payment balance.");
+  if (missingPeople || missingPosition) {
+    const missing = [
+      missingPeople ? "People" : "",
+      missingPosition ? "Position" : "",
+    ].filter(Boolean);
+    parts.push(`New hire pending Xactly setup: missing ${missing.join(" and ")}.`);
+  }
+  return combineSummaryParts(...parts);
 }
 
 function formatNegativeBalance(summary: BalanceSummary): string {
