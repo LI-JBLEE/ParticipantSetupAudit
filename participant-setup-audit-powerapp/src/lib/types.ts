@@ -22,6 +22,13 @@ export interface PeopleRecord {
   planType: string;
   effectiveStartDate: Date | null;
   uploadDate: Date | null;
+  employeeStatus: string;
+  terminationDate: Date | null;
+  salary: number | null;
+  salaryCurrency: string;
+  annualVariable: number | null;
+  hrJobTitle: string;
+  level1Manager: string;
 }
 
 export interface PositionRecord {
@@ -84,6 +91,8 @@ export interface ScrRecord {
   supervisoryManager: string;
   oteBaseComm: number | null;
   commissionAmount: number | null;
+  costCenter: string;
+  jobFamily: string;
   businessUnit: string;
   country: string;
   currency: string;
@@ -169,6 +178,106 @@ export interface AuditRow {
 export interface AuditBuildResult {
   rows: AuditRow[];
   warnings: string[];
+  expectations: VerificationExpectation[];
+}
+
+export type VerificationRule = "exists" | "text" | "number" | "date" | "oneOf" | "unverifiable";
+
+export interface VerificationExpectation {
+  verificationId: string;
+  processingMonth: string;
+  generatedAt: string;
+  dueDate: string;
+  employeeId: string;
+  employeeName: string;
+  region: string;
+  lob: string;
+  country: string;
+  analystName: string;
+  analystSource: string;
+  analystConfidence: string;
+  analystSampleSize: number;
+  auditItem: string;
+  fieldKey: string;
+  fieldLabel: string;
+  baselineValue: string;
+  expectedValue: string;
+  rule: VerificationRule;
+  deferred: string;
+  note: string;
+}
+
+export interface VerificationFieldResult extends VerificationExpectation {
+  actualValue: string;
+  matched: string;
+}
+
+export type VerificationProgressStatus =
+  | "Completed"
+  | "Partially Completed"
+  | "Pending"
+  | "Manager Mismatch Only"
+  | "Deferred"
+  | "Not Verifiable";
+
+export type VerificationSlaStatus = "On Time" | "Overdue" | "Not Due" | "Not Applicable";
+
+export interface VerificationResultRow {
+  verificationId: string;
+  processingMonth: string;
+  employeeId: string;
+  employeeName: string;
+  region: string;
+  lob: string;
+  country: string;
+  analystName: string;
+  analystSource: string;
+  analystConfidence: string;
+  analystSampleSize: number;
+  auditItem: string;
+  progressStatus: VerificationProgressStatus;
+  slaStatus: VerificationSlaStatus;
+  baselineGeneratedAt: string;
+  dueDate: string;
+  followUpPeopleDate: string;
+  completedDate: string;
+  timely: string;
+  completedFields: string;
+  pendingFields: string;
+  notVerifiableFields: string;
+  verificationNotes: string;
+}
+
+export interface FollowUpBuildResult {
+  rows: VerificationResultRow[];
+  fieldResults: VerificationFieldResult[];
+  warnings: string[];
+}
+
+export interface DashboardBreakdownRow {
+  label: string;
+  employees: number;
+  required: number;
+  completed: number;
+  pending: number;
+  overdue: number;
+  inferred: number;
+}
+
+export interface DashboardModel {
+  regionOptions: string[];
+  commissionedEmployees: number;
+  setupRequired: number;
+  setupRequiredRate: number;
+  completed: number;
+  partiallyCompleted: number;
+  pending: number;
+  managerMismatchOnly: number;
+  completionRate: number;
+  latestPeopleDate: string;
+  byRegion: DashboardBreakdownRow[];
+  byLob: DashboardBreakdownRow[];
+  byAnalyst: DashboardBreakdownRow[];
 }
 
 export interface UploadDefinition {

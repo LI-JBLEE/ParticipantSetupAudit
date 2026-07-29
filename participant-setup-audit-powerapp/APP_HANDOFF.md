@@ -1,12 +1,16 @@
 # Participant Setup Audit - App Handoff
 
-Last updated: 2026-04-27
+Last updated: 2026-07-29
 
-Latest committed app change commit: `939510`
+Latest committed app change commit before the current upgrade: `6a7a30e`
+
+Current upgrade: seven-day People verification, SCR-based manager dashboard, and PDF/interactive HTML export.
+
+App UI version: `1.2`
 
 ## 1. App purpose
 
-This app generates a `Participant Setup Audit` report entirely in the browser.
+This app generates a `Participant Setup Audit` report, verifies later Xactly People updates, and provides a manager dashboard entirely in the browser.
 
 Primary goals:
 
@@ -70,7 +74,7 @@ There is no backend and no server-side data processing.
 ## 5. Power Apps wrapper notes
 
 - The app is Power Apps wrapper-ready but currently runs as a normal Vite app.
-- [power.config.json](/c:/Codex/PowerApps/Participant%20Setup%20Audit/participant-setup-audit-powerapp/power.config.json) still uses a placeholder `appId`.
+- [power.config.json](/c:/Codex/PowerApps/Participant%20Setup%20Audit/participant-setup-audit-powerapp/power.config.json) contains the configured app and environment IDs.
 - `buildPath` is `./dist`.
 - The current local app URL in config is `http://localhost:5173`.
 
@@ -384,7 +388,10 @@ Workbook generation is handled in [engine.ts](/c:/Codex/PowerApps/Participant%20
 Sheets:
 
 1. `Audit Report`
-2. `Summary`
+2. `Column Guide`
+3. `Summary`
+4. `Verification Baseline`
+5. `SCR Population`
 
 `Summary` contains:
 
@@ -465,3 +472,69 @@ When making future changes:
 3. If logic changed, run a sample-data smoke test with `npx tsx -`
 4. If UI changed, capture a fresh browser screenshot
 5. Update this document if business rules or output columns changed
+
+## 18. Follow-up verification and dashboard
+
+### Follow-up workflow
+
+1. Run the initial audit with the eight source files.
+2. Download the initial workbook. Its `Verification Baseline` sheet stores expected People field values and a due date seven calendar days after generation.
+3. Later, upload the initial workbook and the latest People file in `Follow-up Verification`.
+4. Generate a workbook containing:
+   - `Verification Report`
+   - `Column Guide`
+   - `Field Details`
+   - `Summary`
+
+Progress values:
+
+- `Completed`
+- `Partially Completed`
+- `Pending`
+- `Manager Mismatch Only`
+- `Deferred`
+- `Not Verifiable`
+
+SLA values:
+
+- `On Time`
+- `Overdue`
+- `Not Due`
+- `Not Applicable`
+
+Direct People verification mappings:
+
+- SCR Job Title -> People `HR_Job_Title`
+- SCR Supervisory Manager -> People `Level_1_Manager`
+- SCR Commission Amount -> People `Annual_Variable`
+- SCR OTE less Commission Amount -> People `Salary`
+- SCR Country -> People `Country`
+- SCR Currency -> People `Salary Currency`
+
+SCR Business Unit, Position setup, and OKR assignment are `Not Verifiable` until an approved source mapping or additional follow-up file is available.
+
+### Dashboard
+
+- Commissioned employee population: distinct current-SCR employees with `Active Status = Yes`
+- A blank current-SCR Active Status is a Termination; absence from the current SCR is Transfer to Non-Sales
+- Region filter: All Regions, APAC, EMEA, LATAM, or NAMER when present
+- Headcount breakdowns: Region, derived LOB, and assigned/inferred Analyst
+- Setup Required: Completed + Partially Completed + Pending
+- Completion Rate: Completed / Setup Required
+- Manager Mismatch Only is shown separately; Deferred and Not Verifiable are excluded from Setup Required and Completion Rate
+- KPI tiles provide hover descriptions
+- PDF export uses a compact portrait print layout; HTML export is self-contained and retains an offline Region filter using aggregated data only
+
+### Analyst ownership inference
+
+Actual People `Analyst_Name` remains authoritative except for Transfer to Sales, which is treated like New Hire. Missing ownership is inferred from active current-SCR employees with existing People analyst mappings:
+
+1. Unique top Analyst for normalized SCR Country + derived LOB
+2. Unique top Analyst for resolved Region + derived LOB
+3. `Unassigned` when no candidates exist or the highest count is tied
+
+The baseline and follow-up reports retain `analystSource`, `analystConfidence`, and `analystSampleSize`. Inference affects dashboard ownership only and never writes back to People.
+
+### LOB derivation
+
+For active current-SCR employees, apply this priority: Cost Center containing GCP -> GCP; Job Family beginning with Sales Development -> SD; Advertising Sales/Operations -> LMS; LCS Sales/Operations -> LTS; Sales Solutions/Operations -> LSS; Global Sales Operations -> SD except SalesQ VP -> Global. Otherwise use People `Business_Unit`, displaying TS as LTS and MS as LMS.

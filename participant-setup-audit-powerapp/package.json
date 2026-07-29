@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:smoke": "tsx src/lib/engine.test.ts"
   },
   "dependencies": {
     "@microsoft/power-apps": "^1.0.3",

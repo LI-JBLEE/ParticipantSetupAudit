@@ -7,9 +7,12 @@ import type {
   AuditRow,
   BalanceRow,
   BalanceSummary,
+  DashboardBreakdownRow,
+  DashboardModel,
   FileParseResult,
   FilterOptions,
   Filters,
+  FollowUpBuildResult,
   LoaRecord,
   MsftTransferRecord,
   PeopleRecord,
@@ -18,6 +21,12 @@ import type {
   QuotaAssignmentRow,
   ScrRecord,
   UploadDefinition,
+  VerificationExpectation,
+  VerificationFieldResult,
+  VerificationProgressStatus,
+  VerificationResultRow,
+  VerificationRule,
+  VerificationSlaStatus,
 } from "./types";
 
 const XLSX = ((XLSXImport as unknown as { default?: typeof XLSXImport }).default ?? XLSXImport) as typeof XLSXImport;
@@ -26,6 +35,76 @@ const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SE
 const REGION_OPTIONS = ["APAC", "EMEA", "LATAM", "NAMER"];
 const CURRENTLY_ON_LOA_PREFIX = "[Currently on LOA]";
 const NEGATIVE_BALANCE_MATERIALITY_THRESHOLD = 1;
+
+const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
+  auditItem: "Consolidated audit action or issue identified for the employee.",
+  processingMonth: "Month selected when the audit was generated.",
+  employeeId: "Unique employee identifier.",
+  employeeName: "Employee's full name.",
+  region: "Employee region derived from the configured country-to-region mapping.",
+  lob: "Employee line of business derived from the configured SCR and People mapping rules.",
+  country: "Employee country used for audit filtering and ownership mapping.",
+  currentActiveStatus: "Active Status from the current-month SCR.",
+  currentOnLeave: "Current leave-of-absence indicator from the SCR.",
+  currentFirstDayOfLeave: "First day of leave recorded in the current SCR.",
+  changeSummary: "Brief explanation of the setup action, change, or data issue detected.",
+  peoplePlanEffectiveDate: "Current plan effective date in the People record.",
+  peopleBusinessUnit: "Current Business_Unit value in the People record.",
+  analystName: "Analyst assigned or inferred to own the setup action.",
+  planType: "Current plan type in the People record.",
+  hireDate: "Hire date relevant to a new-hire or rehire audit item.",
+  terminationDate: "Termination date relevant to a termination audit item.",
+  rehireInPeople: "Indicates whether the People record reflects the employee as a rehire.",
+  negativeBalance: "Material negative payment balance identified for the employee.",
+  missingPeopleSetup: "Indicates whether the employee is missing from the People setup.",
+  missingPositionSetup: "Indicates whether the employee is missing from the Position setup.",
+  previousJobTitle: "Job title in the previous-month SCR.",
+  currentJobTitle: "Job title in the current-month SCR.",
+  previousSupervisoryManager: "Supervisory manager in the previous-month SCR.",
+  currentSupervisoryManager: "Supervisory manager in the current-month SCR.",
+  previousCommissionAmount: "Commission amount in the previous-month SCR.",
+  currentCommissionAmount: "Commission amount in the current-month SCR.",
+  previousBusinessUnit: "Business unit in the previous-month SCR.",
+  currentBusinessUnit: "Business unit in the current-month SCR.",
+  previousCountry: "Country in the previous-month SCR.",
+  currentCountry: "Country in the current-month SCR.",
+  previousCurrency: "Currency in the previous-month SCR.",
+  currentCurrency: "Currency in the current-month SCR.",
+  loaFirstDayOfLeave: "First day of leave from the LOA report.",
+  loaEstimatedLastDay: "Estimated last day of leave from the LOA report.",
+  loaTotalDays: "Total leave duration from the LOA report.",
+  okrStartMonth: "Start month of the relevant OKR assignment.",
+  okrEndMonth: "End month of the relevant OKR assignment.",
+  transferDirection: "Detected direction of the employee's sales-role transfer.",
+  microsoftTransfer: "Indicates whether the employee appears in the Transfer to MSFT file.",
+  peopleUploadDate: "Upload date of the People record used in the audit.",
+};
+
+const VERIFICATION_COLUMN_DESCRIPTIONS: Record<keyof VerificationResultRow, string> = {
+  verificationId: "Unique identifier for the employee audit action being verified.",
+  processingMonth: "Processing month carried forward from the initial audit.",
+  employeeId: "Unique employee identifier.",
+  employeeName: "Employee's full name.",
+  region: "Employee region recorded in the initial audit baseline.",
+  lob: "Employee line of business recorded in the initial audit baseline.",
+  country: "Employee country recorded in the initial audit baseline.",
+  analystName: "Analyst assigned or inferred to own the setup action.",
+  analystSource: "Source of the analyst assignment, such as People or an inferred mapping.",
+  analystConfidence: "Confidence percentage for an inferred analyst assignment.",
+  analystSampleSize: "Number of existing employees supporting the inferred analyst assignment.",
+  auditItem: "Audit action or issue carried forward from the initial audit.",
+  progressStatus: "Overall result: Completed, Partially Completed, Pending, Manager Mismatch Only, Deferred, or Not Verifiable.",
+  slaStatus: "Timeliness result based on the due date and follow-up People snapshot.",
+  baselineGeneratedAt: "Date and time when the initial verification baseline was generated.",
+  dueDate: "Expected completion date, seven days after the initial audit was generated.",
+  followUpPeopleDate: "Snapshot or upload date of the follow-up People file.",
+  completedDate: "People upload date recorded when all verifiable fields are completed.",
+  timely: "Yes when a completed setup was reflected by the due date; otherwise No.",
+  completedFields: "Fields whose follow-up People values match the expected values.",
+  pendingFields: "Verifiable fields that do not yet match the expected values.",
+  notVerifiableFields: "Fields that cannot be confirmed from a People-only follow-up.",
+  verificationNotes: "Notes explaining verification limitations or special handling.",
+};
 
 const REQUIRED_UPLOADS: UploadDefinition[] = [
   { key: "currentScr", label: "Sales Compensation Report (Current Month)", accept: ".xlsx,.xls" },
@@ -117,6 +196,13 @@ export async function parsePeopleFile(file: File): Promise<FileParseResult<{ byI
     planType: findColumn(header, ["plantype"]),
     effectiveStartDate: findColumn(header, ["effectivestartdate"]),
     uploadDate: findColumn(header, ["uploaddate"]),
+    employeeStatus: findColumn(header, ["employeestatus"]),
+    terminationDate: findColumn(header, ["terminationdate"]),
+    salary: findExactColumn(header, ["salary"], ["salary"]),
+    salaryCurrency: findColumn(header, ["salarycurrency"]),
+    annualVariable: findExactColumn(header, ["annualvariable"], ["annualvariable"]),
+    hrJobTitle: findColumn(header, ["hrjobtitle"]),
+    level1Manager: findColumn(header, ["level1manager"]),
   };
 
   const historyById: Record<string, PeopleRecord[]> = {};
@@ -143,6 +229,13 @@ export async function parsePeopleFile(file: File): Promise<FileParseResult<{ byI
       planType: text(cell(row, cols.planType)),
       effectiveStartDate: toDate(cell(row, cols.effectiveStartDate)),
       uploadDate: toDate(cell(row, cols.uploadDate)),
+      employeeStatus: text(cell(row, cols.employeeStatus)),
+      terminationDate: toDate(cell(row, cols.terminationDate)),
+      salary: toNumber(cell(row, cols.salary)),
+      salaryCurrency: text(cell(row, cols.salaryCurrency)),
+      annualVariable: toNumber(cell(row, cols.annualVariable)),
+      hrJobTitle: text(cell(row, cols.hrJobTitle)),
+      level1Manager: text(cell(row, cols.level1Manager)),
     };
 
     rows += 1;
@@ -337,6 +430,8 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
     supervisoryManager: findColumn(header, ["supervisorymanager"]),
     oteBaseComm: findColumn(header, ["otebasecomm"]),
     commissionAmount: findColumn(header, ["commissionamount"]),
+    costCenter: findExactColumn(header, ["costcenter"], ["costcenter"]),
+    jobFamily: findExactColumn(header, ["jobfamily"], ["jobfamily"]),
     businessUnit: findExactColumn(header, ["businessunit"], ["businessunit"]),
     country: findColumn(header, ["country"]),
     currency: findColumn(header, ["currency"]),
@@ -368,6 +463,8 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
       supervisoryManager: text(cell(row, cols.supervisoryManager)),
       oteBaseComm: toNumber(cell(row, cols.oteBaseComm)),
       commissionAmount: toNumber(cell(row, cols.commissionAmount)),
+      costCenter: text(cell(row, cols.costCenter)),
+      jobFamily: text(cell(row, cols.jobFamily)),
       businessUnit: displayOrUnmapped(text(cell(row, cols.businessUnit))),
       country: displayOrUnmapped(text(cell(row, cols.country))),
       currency: text(cell(row, cols.currency)),
@@ -418,6 +515,7 @@ export function buildAuditReport(
   filters: Filters,
   data: AppData,
   countryToRegion: Record<string, string>,
+  generatedAt = new Date(),
 ): AuditBuildResult {
   const processingMonthDate = parseMonthKey(processingMonth);
   if (!processingMonthDate) throw new Error("Invalid processing month.");
@@ -429,6 +527,18 @@ export function buildAuditReport(
   const transferInCutoff = new Date(previousMonthDate.getFullYear(), previousMonthDate.getMonth(), 15);
   const warnings: string[] = [];
   const rows: AuditRow[] = [];
+  const transferToSalesIds = new Set(
+    Object.entries(data.currentScrById)
+      .filter(
+        ([employeeId, current]) =>
+          isYes(current.activeStatus) &&
+          !data.previousScrById[employeeId] &&
+          current.hireDate !== null &&
+          current.hireDate < transferInCutoff,
+      )
+      .map(([employeeId]) => employeeId),
+  );
+  const transferAnalystIndex = buildAnalystInferenceIndex(data, countryToRegion, transferToSalesIds);
 
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
@@ -462,6 +572,7 @@ export function buildAuditReport(
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
     if (isNewHireInProcessingWindow(current, newHireStart, newHireEnd)) continue;
+    if (transferToSalesIds.has(current.employeeId)) continue;
     const missingPeople = !data.peopleById[current.employeeId];
     const missingPosition = !data.positionById[current.employeeId];
     if (!missingPeople && !missingPosition) continue;
@@ -504,11 +615,20 @@ export function buildAuditReport(
       compareField("Country", previous.country, current.country),
       compareField("Currency", previous.currency, current.currency),
     ].filter((item) => item.changed);
+    const previousOnLeave = isYes(previous.onLeave);
+    const currentOnLeave = isYes(current.onLeave);
+    const isLoaReturn = previousOnLeave && !currentOnLeave;
+    const loa = previousOnLeave !== currentOnLeave ? data.loaById[employeeId] : undefined;
+    if (previousOnLeave !== currentOnLeave && !loa) warnings.push(`LOA detail not found for employee ${employeeId}.`);
 
     if (changes.length > 0) {
       rows.push(
         createAuditRow(
-          isYes(current.onLeave) ? "Deferred Change While on LOA" : "Change to Existing Participant",
+          isLoaReturn
+            ? "LOA Return with Participant Changes"
+            : currentOnLeave
+              ? "Deferred Change While on LOA"
+              : "Change to Existing Participant",
           processingMonth,
           employeeId,
           current.fullName || context.name,
@@ -526,17 +646,18 @@ export function buildAuditReport(
             currentCountry: hasChanged(changes, "Country") ? current.country : "",
             previousCurrency: hasChanged(changes, "Currency") ? previous.currency : "",
             currentCurrency: hasChanged(changes, "Currency") ? current.currency : "",
-            changeSummary: changes.map((item) => item.label).join(", "),
+            loaFirstDayOfLeave: isLoaReturn ? formatDate(loa?.firstDayOfLeave ?? null) : "",
+            loaEstimatedLastDay: isLoaReturn ? formatDate(loa?.estimatedLastDayOfLeave ?? null) : "",
+            loaTotalDays: isLoaReturn ? (loa?.totalDaysOnLeave ?? "") : "",
+            changeSummary: isLoaReturn
+              ? `LOA Return; ${changes.map((item) => item.label).join(", ")}`
+              : changes.map((item) => item.label).join(", "),
           },
         ),
       );
     }
 
-    const previousOnLeave = isYes(previous.onLeave);
-    const currentOnLeave = isYes(current.onLeave);
-    if (previousOnLeave !== currentOnLeave) {
-      const loa = data.loaById[employeeId];
-      if (!loa) warnings.push(`LOA detail not found for employee ${employeeId}.`);
+    if (previousOnLeave !== currentOnLeave && !(isLoaReturn && changes.length > 0)) {
       rows.push(
         createAuditRow(
           currentOnLeave ? "LOA Start" : "LOA Return",
@@ -589,23 +710,37 @@ export function buildAuditReport(
     }
   }
 
-  for (const [employeeId, current] of Object.entries(data.currentScrById)) {
-    if (!isYes(current.activeStatus)) continue;
-    if (data.previousScrById[employeeId]) continue;
-    if (!current.hireDate || current.hireDate >= transferInCutoff) continue;
+  for (const employeeId of transferToSalesIds) {
+    const current = data.currentScrById[employeeId];
+    if (!current) continue;
     const context = resolveEmployeeContext(employeeId, data, countryToRegion);
     if (!matchesFilters(context, filters)) continue;
     const balance = data.balanceById[employeeId];
+    const missingPeople = !data.peopleById[employeeId];
+    const missingPosition = !data.positionById[employeeId];
+    const setupRequired = missingPeople || missingPosition;
+    const analystAssignment = resolveAnalystAssignment(
+      employeeId,
+      data,
+      countryToRegion,
+      transferAnalystIndex,
+      true,
+    );
     rows.push(
-      createAuditRow("Transfer to Sales", processingMonth, employeeId, current.fullName || context.name, context, {
+      createAuditRow(setupRequired ? "Transfer to Sales - Xactly Setup Required" : "Transfer to Sales", processingMonth, employeeId, current.fullName || context.name, context, {
+        analystName: analystAssignment.name,
         transferDirection: "Non-Sales to Sales",
         hireDate: formatDate(current.hireDate),
         currentJobTitle: current.jobTitle,
         currentBusinessUnit: current.businessUnit,
         currentCountry: current.country,
+        currentCurrency: current.currency,
+        missingPeopleSetup: missingPeople ? "Yes" : "No",
+        missingPositionSetup: missingPosition ? "Yes" : "No",
         negativeBalance: balance ? formatMaterialNegativeBalance(balance) : "",
-        changeSummary:
-          "Active in the current month SCR, not present in the previous month SCR, and hire date is earlier than the previous month 15th.",
+        changeSummary: setupRequired
+          ? `Transfer to Sales requires Xactly setup. ${buildMissingXactlySetupSummary(missingPeople, missingPosition)}`
+          : "Active in the current month SCR, not present in the previous month SCR, and hire date is earlier than the previous month 15th.",
       }),
     );
   }
@@ -651,10 +786,19 @@ export function buildAuditReport(
     return left.employeeId.localeCompare(right.employeeId);
   });
 
-  return { rows, warnings: dedupeStrings(warnings) };
+  return {
+    rows,
+    warnings: dedupeStrings(warnings),
+    expectations: buildVerificationExpectations(rows, data, countryToRegion, generatedAt),
+  };
 }
 
-export function buildAuditWorkbook(rows: AuditRow[], fileNames: Record<string, string>): ArrayBuffer {
+export function buildAuditWorkbook(
+  rows: AuditRow[],
+  fileNames: Record<string, string>,
+  expectations: VerificationExpectation[] = [],
+  currentScrById: Record<string, ScrRecord> = {},
+): ArrayBuffer {
   const wb = XLSX.utils.book_new();
   const reportRows = rows.map((row) => ({ ...row }));
   const reportSheet = XLSX.utils.json_to_sheet(reportRows);
@@ -666,6 +810,7 @@ export function buildAuditWorkbook(rows: AuditRow[], fileNames: Record<string, s
   };
   reportSheet["!cols"] = buildColumnWidths(reportRows);
   XLSX.utils.book_append_sheet(wb, reportSheet, "Audit Report");
+  appendColumnGuide(wb, AUDIT_COLUMN_DESCRIPTIONS);
 
   const summaryRows = [
     ...Object.entries(fileNames).map(([key, value]) => ({ Section: "Uploaded File", Name: key, Value: value })),
@@ -676,6 +821,33 @@ export function buildAuditWorkbook(rows: AuditRow[], fileNames: Record<string, s
   applyHeaderStyle(summarySheet);
   summarySheet["!cols"] = buildColumnWidths(summaryRows);
   XLSX.utils.book_append_sheet(wb, summarySheet, "Summary");
+
+  const baselineSheet = XLSX.utils.json_to_sheet(expectations);
+  applyHeaderStyle(baselineSheet);
+  baselineSheet["!autofilter"] = {
+    ref: XLSX.utils.encode_range(
+      baselineSheet["!ref"] ? XLSX.utils.decode_range(baselineSheet["!ref"]) : { s: { c: 0, r: 0 }, e: { c: 0, r: 0 } },
+    ),
+  };
+  baselineSheet["!cols"] = buildColumnWidths(expectations);
+  XLSX.utils.book_append_sheet(wb, baselineSheet, "Verification Baseline");
+
+  const populationRows = Object.values(currentScrById)
+    .filter((current) => isYes(current.activeStatus))
+    .map((current) => ({
+      employeeId: current.employeeId,
+      fullName: current.fullName,
+      activeStatus: current.activeStatus,
+      onLeave: current.onLeave,
+      costCenter: current.costCenter,
+      jobFamily: current.jobFamily,
+      businessUnit: current.businessUnit,
+      country: current.country,
+    }));
+  const populationSheet = XLSX.utils.json_to_sheet(populationRows);
+  applyHeaderStyle(populationSheet);
+  populationSheet["!cols"] = buildColumnWidths(populationRows);
+  XLSX.utils.book_append_sheet(wb, populationSheet, "SCR Population");
 
   return XLSX.write(wb, { bookType: "xlsx", type: "array", cellStyles: true });
 }
@@ -688,6 +860,686 @@ export function buildDownloadFileName(now = new Date()): string {
   const mi = String(now.getMinutes()).padStart(2, "0");
   const ss = String(now.getSeconds()).padStart(2, "0");
   return `Participant_Setup_Audit_${yyyy}${mm}${dd}_${hh}${mi}${ss}.xlsx`;
+}
+
+export async function parseVerificationBaselineFile(
+  file: File,
+): Promise<FileParseResult<{ expectations: VerificationExpectation[]; currentScrById: Record<string, ScrRecord> }>> {
+  const workbook = normalizeWorkbookRanges(XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false }));
+  const sheet = workbook.Sheets["Verification Baseline"];
+  if (!sheet) throw new Error("The selected workbook does not contain a Verification Baseline sheet.");
+
+  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: true });
+  const requiredColumns = ["verificationId", "employeeId", "auditItem", "fieldKey", "expectedValue", "rule"];
+  if (rawRows.length === 0 || requiredColumns.some((column) => !(column in rawRows[0]))) {
+    throw new Error("The Verification Baseline sheet is missing required columns.");
+  }
+
+  const validRules = new Set<VerificationRule>(["exists", "text", "number", "date", "oneOf", "unverifiable"]);
+  const expectations = rawRows.map((row) => {
+    const rule = text(row.rule) as VerificationRule;
+    if (!validRules.has(rule)) throw new Error(`Unknown verification rule: ${rule || "(blank)"}.`);
+    return {
+      verificationId: text(row.verificationId),
+      processingMonth: text(row.processingMonth),
+      generatedAt: text(row.generatedAt),
+      dueDate: text(row.dueDate),
+      employeeId: normalizeEmployeeIdFromCell(row.employeeId) ?? text(row.employeeId),
+      employeeName: text(row.employeeName),
+      region: text(row.region),
+      lob: text(row.lob),
+      country: text(row.country),
+      analystName: text(row.analystName),
+      analystSource: text(row.analystSource) || (text(row.analystName) ? "People" : "Unassigned"),
+      analystConfidence: text(row.analystConfidence),
+      analystSampleSize: toNumber(row.analystSampleSize) ?? 0,
+      auditItem: text(row.auditItem),
+      fieldKey: text(row.fieldKey),
+      fieldLabel: text(row.fieldLabel),
+      baselineValue: text(row.baselineValue),
+      expectedValue: text(row.expectedValue),
+      rule,
+      deferred: text(row.deferred),
+      note: text(row.note),
+    } satisfies VerificationExpectation;
+  });
+
+  const currentScrById: Record<string, ScrRecord> = {};
+  const populationSheet = workbook.Sheets["SCR Population"];
+  if (populationSheet) {
+    const populationRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(populationSheet, { defval: "", raw: true });
+    for (const row of populationRows) {
+      const employeeId = normalizeEmployeeIdFromCell(row.employeeId) ?? text(row.employeeId);
+      if (!employeeId) continue;
+      currentScrById[employeeId] = {
+        employeeId,
+        firstName: "",
+        lastName: "",
+        fullName: text(row.fullName),
+        originalHireDate: null,
+        activeStatus: text(row.activeStatus),
+        onLeave: text(row.onLeave),
+        firstDayOfLeave: null,
+        hireDate: null,
+        isRehire: "",
+        terminationDate: null,
+        jobTitle: "",
+        supervisoryManager: "",
+        oteBaseComm: null,
+        commissionAmount: null,
+        costCenter: text(row.costCenter),
+        jobFamily: text(row.jobFamily),
+        businessUnit: text(row.businessUnit),
+        country: text(row.country),
+        currency: "",
+      };
+    }
+  }
+
+  return { fileName: file.name, rows: expectations.length, data: { expectations, currentScrById } };
+}
+
+export function buildFollowUpVerification(
+  expectations: VerificationExpectation[],
+  peopleById: Record<string, PeopleRecord>,
+  snapshotDate = findLatestPeopleDate(peopleById) ?? new Date(),
+): FollowUpBuildResult {
+  const grouped = new Map<string, VerificationExpectation[]>();
+  for (const expectation of expectations) {
+    const group = grouped.get(expectation.verificationId);
+    if (group) group.push(expectation);
+    else grouped.set(expectation.verificationId, [expectation]);
+  }
+
+  const fieldResults: VerificationFieldResult[] = [];
+  const rows: VerificationResultRow[] = [];
+  const followUpPeopleDate = formatDate(snapshotDate);
+
+  for (const group of grouped.values()) {
+    const first = group[0];
+    if (!first) continue;
+    const people = peopleById[first.employeeId];
+    const results = group.map((expectation) => {
+      const actualValue = getPeopleVerificationValue(people, expectation.fieldKey);
+      const matched = matchesExpectation(expectation, actualValue);
+      return { ...expectation, actualValue, matched: matched ? "Yes" : "No" } satisfies VerificationFieldResult;
+    });
+    fieldResults.push(...results);
+
+    const verifiable = results.filter((result) => result.rule !== "unverifiable");
+    const completed = verifiable.filter((result) => result.matched === "Yes");
+    const deferred = results.some((result) => isYes(result.deferred));
+    const managerMismatchOnly =
+      first.auditItem === "Change to Existing Participant" &&
+      results.length === 1 &&
+      results[0]?.fieldKey === "level1Manager";
+    let progressStatus: VerificationProgressStatus;
+    if (managerMismatchOnly) progressStatus = "Manager Mismatch Only";
+    else if (verifiable.length === 0) progressStatus = "Not Verifiable";
+    else if (completed.length === verifiable.length) progressStatus = "Completed";
+    else if (deferred) progressStatus = "Deferred";
+    else if (completed.length > 0) progressStatus = "Partially Completed";
+    else progressStatus = "Pending";
+
+    const completedDate = progressStatus === "Completed" ? formatDate(people?.uploadDate ?? snapshotDate) : "";
+    const dueDate = parseIsoDate(first.dueDate);
+    const comparisonDate = parseIsoDate(completedDate) ?? snapshotDate;
+    let slaStatus: VerificationSlaStatus = "Not Applicable";
+    if (
+      progressStatus !== "Manager Mismatch Only" &&
+      progressStatus !== "Deferred" &&
+      progressStatus !== "Not Verifiable" &&
+      dueDate
+    ) {
+      slaStatus = comparisonDate.getTime() <= dueDate.getTime() ? "On Time" : "Overdue";
+      if (progressStatus !== "Completed" && snapshotDate.getTime() <= dueDate.getTime()) slaStatus = "Not Due";
+    }
+
+    rows.push({
+      verificationId: first.verificationId,
+      processingMonth: first.processingMonth,
+      employeeId: first.employeeId,
+      employeeName: first.employeeName,
+      region: first.region,
+      lob: first.lob,
+      country: first.country,
+      analystName: first.analystName,
+      analystSource: first.analystSource,
+      analystConfidence: first.analystConfidence,
+      analystSampleSize: first.analystSampleSize,
+      auditItem: first.auditItem,
+      progressStatus,
+      slaStatus,
+      baselineGeneratedAt: first.generatedAt,
+      dueDate: first.dueDate,
+      followUpPeopleDate,
+      completedDate,
+      timely: progressStatus === "Completed" ? (slaStatus === "On Time" ? "Yes" : "No") : "",
+      completedFields: results.filter((result) => result.matched === "Yes").map((result) => result.fieldLabel).join(", "),
+      pendingFields: results
+        .filter((result) => result.rule !== "unverifiable" && result.matched !== "Yes")
+        .map((result) => result.fieldLabel)
+        .join(", "),
+      notVerifiableFields: results
+        .filter((result) => result.rule === "unverifiable")
+        .map((result) => result.fieldLabel)
+        .join(", "),
+      verificationNotes: dedupeStrings(results.map((result) => result.note).filter(Boolean)).join(" | "),
+    });
+  }
+
+  rows.sort((left, right) => {
+    const statusCompare = left.progressStatus.localeCompare(right.progressStatus);
+    if (statusCompare !== 0) return statusCompare;
+    return left.employeeId.localeCompare(right.employeeId);
+  });
+
+  const warnings = followUpPeopleDate ? [] : ["No People Upload_Date was available; the current date was used for SLA comparison."];
+  return { rows, fieldResults, warnings };
+}
+
+export function buildFollowUpWorkbook(
+  result: FollowUpBuildResult,
+  fileNames: Record<string, string>,
+): ArrayBuffer {
+  const wb = XLSX.utils.book_new();
+  const reportSheet = XLSX.utils.json_to_sheet(result.rows);
+  applyHeaderStyle(reportSheet);
+  reportSheet["!cols"] = buildColumnWidths(result.rows);
+  XLSX.utils.book_append_sheet(wb, reportSheet, "Verification Report");
+  appendColumnGuide(wb, VERIFICATION_COLUMN_DESCRIPTIONS);
+
+  const detailSheet = XLSX.utils.json_to_sheet(result.fieldResults);
+  applyHeaderStyle(detailSheet);
+  detailSheet["!cols"] = buildColumnWidths(result.fieldResults);
+  XLSX.utils.book_append_sheet(wb, detailSheet, "Field Details");
+
+  const summaryRows = [
+    ...Object.entries(fileNames).map(([key, value]) => ({ Section: "Uploaded File", Name: key, Value: value })),
+    ...Object.entries(countVerificationStatuses(result.rows)).map(([key, value]) => ({
+      Section: "Verification Status",
+      Name: key,
+      Value: value,
+    })),
+    { Section: "Verification Status", Name: "Total Rows", Value: result.rows.length },
+  ];
+  const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+  applyHeaderStyle(summarySheet);
+  summarySheet["!cols"] = buildColumnWidths(summaryRows);
+  XLSX.utils.book_append_sheet(wb, summarySheet, "Summary");
+  return XLSX.write(wb, { bookType: "xlsx", type: "array", cellStyles: true });
+}
+
+export function buildFollowUpDownloadFileName(now = new Date()): string {
+  return buildDownloadFileName(now).replace("Participant_Setup_Audit_", "Participant_Setup_Verification_");
+}
+
+export function summarizeSetupExecution(rows: VerificationResultRow[]) {
+  const setupRows = rows.filter(
+    (row) =>
+      row.progressStatus === "Completed" ||
+      row.progressStatus === "Partially Completed" ||
+      row.progressStatus === "Pending",
+  );
+  const completed = setupRows.filter((row) => row.progressStatus === "Completed").length;
+  return {
+    setupRows,
+    setupRequired: setupRows.length,
+    completed,
+    partiallyCompleted: setupRows.filter((row) => row.progressStatus === "Partially Completed").length,
+    pending: setupRows.filter((row) => row.progressStatus === "Pending").length,
+    managerMismatchOnly: rows.filter((row) => row.progressStatus === "Manager Mismatch Only").length,
+    completionRate: setupRows.length > 0 ? completed / setupRows.length : 0,
+  };
+}
+
+export function buildDashboardModel(
+  currentScrById: Record<string, ScrRecord>,
+  peopleById: Record<string, PeopleRecord>,
+  verificationRows: VerificationResultRow[],
+  countryToRegion: Record<string, string>,
+  selectedRegion = "All Regions",
+): DashboardModel {
+  const analystData: AnalystData = { peopleById, currentScrById, previousScrById: {} };
+  const transferToSalesIds = new Set(
+    verificationRows.filter((row) => isTransferToSalesAuditItem(row.auditItem)).map((row) => row.employeeId),
+  );
+  const analystIndex = buildAnalystInferenceIndex(analystData, countryToRegion, transferToSalesIds);
+  const commissioned = Object.values(currentScrById)
+    .filter((current) => isYes(current.activeStatus))
+    .map((current) => ({
+      region: dashboardRegion(countryToRegion[normalizeText(current.country)] ?? ""),
+      lob: deriveLob(current, peopleById[current.employeeId]),
+      analystName: resolveAnalystAssignment(
+        current.employeeId,
+        analystData,
+        countryToRegion,
+        analystIndex,
+        transferToSalesIds.has(current.employeeId),
+      ).name,
+    }));
+  const regionOptions = sortDisplayValues(new Set(commissioned.map((person) => person.region)));
+  const visiblePeople = selectedRegion === "All Regions"
+    ? commissioned
+    : commissioned.filter((person) => person.region === selectedRegion);
+  const regionVerificationRows = selectedRegion === "All Regions"
+    ? verificationRows
+    : verificationRows.filter((row) => row.region === selectedRegion);
+  const execution = summarizeSetupExecution(regionVerificationRows);
+
+  return {
+    regionOptions,
+    commissionedEmployees: visiblePeople.length,
+    setupRequired: execution.setupRequired,
+    setupRequiredRate: visiblePeople.length > 0 ? execution.setupRequired / visiblePeople.length : 0,
+    completed: execution.completed,
+    partiallyCompleted: execution.partiallyCompleted,
+    pending: execution.pending,
+    managerMismatchOnly: execution.managerMismatchOnly,
+    completionRate: execution.completionRate,
+    latestPeopleDate: formatDate(findLatestPeopleDate(peopleById)),
+    byRegion: buildDashboardBreakdown(
+      visiblePeople,
+      execution.setupRows,
+      (person) => person.region,
+      (row) => row.region,
+    ),
+    byLob: buildDashboardBreakdown(visiblePeople, execution.setupRows, (person) => person.lob, (row) => row.lob),
+    byAnalyst: buildDashboardBreakdown(
+      visiblePeople,
+      execution.setupRows,
+      (person) => person.analystName || "Unassigned",
+      (row) => row.analystName || "Unassigned",
+    ),
+  };
+}
+
+function buildVerificationExpectations(
+  rows: AuditRow[],
+  data: AppData,
+  countryToRegion: Record<string, string>,
+  generatedAt: Date,
+): VerificationExpectation[] {
+  const expectations: VerificationExpectation[] = [];
+  const transferToSalesIds = new Set(
+    rows.filter((row) => isTransferToSalesAuditItem(row.auditItem)).map((row) => row.employeeId),
+  );
+  const analystIndex = buildAnalystInferenceIndex(data, countryToRegion, transferToSalesIds);
+  const generatedAtText = generatedAt.toISOString();
+  const dueDateValue = new Date(generatedAt);
+  dueDateValue.setDate(dueDateValue.getDate() + 7);
+  const dueDate = formatDate(dueDateValue);
+
+  for (const row of rows) {
+    if (row.auditItem === "Unmapped Data Warning") continue;
+    const current = data.currentScrById[row.employeeId];
+    const previous = data.previousScrById[row.employeeId];
+    const people = data.peopleById[row.employeeId];
+    const analystAssignment = resolveAnalystAssignment(
+      row.employeeId,
+      data,
+      countryToRegion,
+      analystIndex,
+      isTransferToSalesAuditItem(row.auditItem),
+    );
+    const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
+    const deferred = row.auditItem === "Deferred Change While on LOA" ? "Yes" : "No";
+    const add = (
+      fieldKey: string,
+      fieldLabel: string,
+      expectedValue: string,
+      rule: VerificationRule,
+      note = "",
+    ): void => {
+      expectations.push({
+        verificationId,
+        processingMonth: row.processingMonth,
+        generatedAt: generatedAtText,
+        dueDate,
+        employeeId: row.employeeId,
+        employeeName: row.employeeName,
+        region: row.region,
+        lob: row.lob,
+        country: row.country,
+        analystName: analystAssignment.name,
+        analystSource: analystAssignment.source,
+        analystConfidence: analystAssignment.confidence,
+        analystSampleSize: analystAssignment.sampleSize,
+        auditItem: row.auditItem,
+        fieldKey,
+        fieldLabel,
+        baselineValue: getPeopleVerificationValue(people, fieldKey),
+        expectedValue,
+        rule,
+        deferred,
+        note,
+      });
+    };
+    const addCoreEmployeeExpectations = (): void => {
+      if (!current) return;
+      add("record", "People Record", "Present", "exists");
+      add("employeeStatus", "Employee Status", isYes(current.onLeave) ? "LOA" : "Active", "text");
+      if (current.jobTitle) add("hrJobTitle", "HR Job Title", current.jobTitle, "text");
+      if (current.supervisoryManager) add("level1Manager", "Level 1 Manager", current.supervisoryManager, "text");
+      if (current.commissionAmount !== null) {
+        add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+      }
+      if (current.oteBaseComm !== null && current.commissionAmount !== null) {
+        add("salary", "Salary", String(current.oteBaseComm - current.commissionAmount), "number");
+      }
+      if (current.country && current.country !== "Unmapped") add("country", "Country", current.country, "text");
+      if (current.currency) add("salaryCurrency", "Salary Currency", current.currency, "text");
+      if (current.businessUnit && current.businessUnit !== "Unmapped") {
+        add(
+          "businessUnit",
+          "Business Unit",
+          current.businessUnit,
+          "unverifiable",
+          "SCR Business Unit requires an approved mapping to Xactly Business_Unit.",
+        );
+      }
+    };
+
+    if (
+      row.auditItem === "New Hire" ||
+      row.auditItem === "Transfer to Sales" ||
+      row.auditItem === "Transfer to Sales - Xactly Setup Required"
+    ) {
+      addCoreEmployeeExpectations();
+      if (row.missingPositionSetup === "Yes") {
+        add("positionRecord", "Position Record", "Present", "unverifiable", "Position cannot be verified from a People-only follow-up.");
+      }
+      continue;
+    }
+
+    if (row.auditItem === "Missing Xactly Setup") {
+      if (row.missingPeopleSetup === "Yes") addCoreEmployeeExpectations();
+      if (row.missingPositionSetup === "Yes") {
+        add("positionRecord", "Position Record", "Present", "unverifiable", "Position cannot be verified from a People-only follow-up.");
+      }
+      continue;
+    }
+
+    if (
+      (row.auditItem === "Change to Existing Participant" ||
+        row.auditItem === "Deferred Change While on LOA" ||
+        row.auditItem === "LOA Return with Participant Changes") &&
+      current &&
+      previous
+    ) {
+      if (compareField("Job Title", previous.jobTitle, current.jobTitle).changed) {
+        add("hrJobTitle", "HR Job Title", current.jobTitle, "text");
+      }
+      if (compareField("Supervisory Manager", previous.supervisoryManager, current.supervisoryManager).changed) {
+        add("level1Manager", "Level 1 Manager", current.supervisoryManager, "text");
+      }
+      if (compareField("OTE", previous.oteBaseComm, current.oteBaseComm).changed) {
+        if (current.oteBaseComm !== null && current.commissionAmount !== null) {
+          add("salary", "Salary", String(current.oteBaseComm - current.commissionAmount), "number");
+        } else {
+          add("salary", "Salary", "", "unverifiable", "Salary cannot be derived when OTE or Commission Amount is blank.");
+        }
+      }
+      if (compareField("Commission Amount", previous.commissionAmount, current.commissionAmount).changed) {
+        if (current.commissionAmount !== null) add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+      }
+      if (compareField("Business Unit", previous.businessUnit, current.businessUnit).changed) {
+        add(
+          "businessUnit",
+          "Business Unit",
+          current.businessUnit,
+          "unverifiable",
+          "SCR Business Unit requires an approved mapping to Xactly Business_Unit.",
+        );
+      }
+      if (compareField("Country", previous.country, current.country).changed) add("country", "Country", current.country, "text");
+      if (compareField("Currency", previous.currency, current.currency).changed) {
+        add("salaryCurrency", "Salary Currency", current.currency, "text");
+      }
+      if (row.auditItem === "LOA Return with Participant Changes") {
+        add("employeeStatus", "Employee Status", "Active", "text");
+      }
+      continue;
+    }
+
+    if (row.auditItem === "LOA Start") {
+      add("employeeStatus", "Employee Status", "LOA", "text");
+      continue;
+    }
+    if (row.auditItem === "LOA Return") {
+      add("employeeStatus", "Employee Status", "Active", "text");
+      continue;
+    }
+    if (row.auditItem === "Transfer to Non-Sales") {
+      add("employeeStatus", "Employee Status", "Transfer Out|Non-Commissionable", "oneOf");
+      continue;
+    }
+    if (row.auditItem === "Termination") {
+      add("employeeStatus", "Employee Status", "Terminated", "text");
+      const expectedTerminationDate = current?.terminationDate ?? previous?.terminationDate ?? null;
+      if (expectedTerminationDate) add("terminationDate", "Termination Date", formatDate(expectedTerminationDate), "date");
+      continue;
+    }
+    if (row.auditItem === "OKR Plan End") {
+      add("okrAssignment", "OKR Assignment", row.okrEndMonth, "unverifiable", "OKR assignment cannot be verified from a People-only follow-up.");
+    }
+  }
+
+  return expectations;
+}
+
+function getPeopleVerificationValue(people: PeopleRecord | undefined, fieldKey: string): string {
+  if (fieldKey === "record") return people ? "Present" : "Missing";
+  if (!people) return "";
+  if (fieldKey === "employeeStatus") return people.employeeStatus;
+  if (fieldKey === "terminationDate") return formatDate(people.terminationDate);
+  if (fieldKey === "salary") return people.salary === null ? "" : String(people.salary);
+  if (fieldKey === "salaryCurrency") return people.salaryCurrency;
+  if (fieldKey === "annualVariable") return people.annualVariable === null ? "" : String(people.annualVariable);
+  if (fieldKey === "hrJobTitle") return people.hrJobTitle;
+  if (fieldKey === "level1Manager") return people.level1Manager;
+  if (fieldKey === "businessUnit") return people.businessUnit;
+  if (fieldKey === "country") return people.country;
+  return "";
+}
+
+function matchesExpectation(expectation: VerificationExpectation, actualValue: string): boolean {
+  if (expectation.rule === "unverifiable") return false;
+  if (expectation.rule === "exists") return actualValue === "Present";
+  if (expectation.rule === "number") {
+    const expected = toNumber(expectation.expectedValue);
+    const actual = toNumber(actualValue);
+    return expected !== null && actual !== null && numbersEqual(expected, actual);
+  }
+  if (expectation.rule === "oneOf") {
+    const actual = normalizeText(actualValue);
+    return expectation.expectedValue.split("|").some((value) => normalizeText(value) === actual);
+  }
+  if (expectation.rule === "date") return expectation.expectedValue === actualValue;
+  return normalizeText(expectation.expectedValue) === normalizeText(actualValue);
+}
+
+function parseIsoDate(value: string): Date | null {
+  if (!value) return null;
+  const parsed = new Date(`${value.slice(0, 10)}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function findLatestPeopleDate(peopleById: Record<string, PeopleRecord>): Date | null {
+  let latest: Date | null = null;
+  for (const people of Object.values(peopleById)) {
+    if (people.uploadDate && (!latest || people.uploadDate > latest)) latest = people.uploadDate;
+  }
+  return latest;
+}
+
+type AnalystCountMap = Map<string, number>;
+
+interface AnalystInferenceIndex {
+  countryLob: Map<string, AnalystCountMap>;
+  regionLob: Map<string, AnalystCountMap>;
+}
+
+interface AnalystAssignment {
+  name: string;
+  source: string;
+  confidence: string;
+  sampleSize: number;
+}
+
+type AnalystData = Pick<AppData, "peopleById" | "currentScrById" | "previousScrById">;
+
+function buildAnalystInferenceIndex(
+  data: Pick<AnalystData, "peopleById" | "currentScrById">,
+  countryToRegion: Record<string, string>,
+  excludedEmployeeIds: ReadonlySet<string> = new Set(),
+): AnalystInferenceIndex {
+  const index: AnalystInferenceIndex = { countryLob: new Map(), regionLob: new Map() };
+  for (const current of Object.values(data.currentScrById)) {
+    if (!isYes(current.activeStatus)) continue;
+    if (excludedEmployeeIds.has(current.employeeId)) continue;
+    const people = data.peopleById[current.employeeId];
+    const analyst = people?.analystName.trim();
+    const country = normalizeText(current.country);
+    const lob = normalizeText(deriveLob(current, people));
+    if (!analyst || !country || country === "unmapped" || !lob || lob === "unmapped") continue;
+    addAnalystCount(index.countryLob, analystKey(country, lob), analyst);
+    const region = normalizeRegionValue(countryToRegion[country] ?? people?.region ?? "");
+    if (region) addAnalystCount(index.regionLob, analystKey(region, lob), analyst);
+  }
+  return index;
+}
+
+function resolveAnalystAssignment(
+  employeeId: string,
+  data: AnalystData,
+  countryToRegion: Record<string, string>,
+  index: AnalystInferenceIndex,
+  ignorePeopleAnalyst = false,
+): AnalystAssignment {
+  const people = data.peopleById[employeeId];
+  if (!ignorePeopleAnalyst && people?.analystName.trim()) {
+    return { name: people.analystName.trim(), source: "People", confidence: "Confirmed", sampleSize: 0 };
+  }
+
+  const current = data.currentScrById[employeeId];
+  const previous = data.previousScrById[employeeId];
+  const scr = isYes(current?.activeStatus) ? current : isYes(previous?.activeStatus) ? previous : current ?? previous;
+  const country = normalizeText(scr?.country ?? "");
+  const lob = normalizeText(deriveLob(scr, people));
+  if (!country || country === "unmapped" || !lob || lob === "unmapped") {
+    return { name: "Unassigned", source: "Unassigned", confidence: "", sampleSize: 0 };
+  }
+
+  const countryMatch = chooseAnalyst(index.countryLob.get(analystKey(country, lob)), "Inferred: Country + LOB");
+  if (countryMatch) return countryMatch;
+
+  const region = normalizeRegionValue(countryToRegion[country] ?? people?.region ?? "");
+  const regionMatch = region
+    ? chooseAnalyst(index.regionLob.get(analystKey(region, lob)), "Inferred: Region + LOB")
+    : null;
+  return regionMatch ?? { name: "Unassigned", source: "Unassigned", confidence: "", sampleSize: 0 };
+}
+
+function addAnalystCount(index: Map<string, AnalystCountMap>, key: string, analyst: string): void {
+  let counts = index.get(key);
+  if (!counts) {
+    counts = new Map();
+    index.set(key, counts);
+  }
+  counts.set(analyst, (counts.get(analyst) ?? 0) + 1);
+}
+
+function chooseAnalyst(counts: AnalystCountMap | undefined, source: string): AnalystAssignment | null {
+  if (!counts || counts.size === 0) return null;
+  const ranked = [...counts.entries()].sort((left, right) => {
+    const countCompare = right[1] - left[1];
+    return countCompare !== 0 ? countCompare : left[0].localeCompare(right[0]);
+  });
+  const top = ranked[0];
+  if (!top || (ranked[1]?.[1] ?? -1) === top[1]) return null;
+  const sampleSize = ranked.reduce((total, [, count]) => total + count, 0);
+  return {
+    name: top[0],
+    source,
+    confidence: `${Math.round((top[1] / sampleSize) * 100)}%`,
+    sampleSize,
+  };
+}
+
+function analystKey(first: string, lob: string): string {
+  return `${normalizeText(first)}|${normalizeText(lob)}`;
+}
+
+function isTransferToSalesAuditItem(auditItem: string): boolean {
+  return auditItem === "Transfer to Sales" || auditItem === "Transfer to Sales - Xactly Setup Required";
+}
+
+function dashboardRegion(value: string): string {
+  return normalizeRegionValue(value) || "Unmapped";
+}
+
+function deriveLob(scr: ScrRecord | undefined, people: PeopleRecord | undefined): string {
+  if (scr && isYes(scr.activeStatus)) {
+    const costCenter = normalizeText(scr.costCenter);
+    const jobFamily = normalizeText(scr.jobFamily);
+    const businessUnit = normalizeText(scr.businessUnit);
+    if (costCenter.includes("gcp")) return "GCP";
+    if (jobFamily.startsWith("sales development")) return "SD";
+    if (businessUnit === "advertising sales" || businessUnit === "advertising operations") return "LMS";
+    if (businessUnit === "lcs sales" || businessUnit === "lcs operations") return "LTS";
+    if (businessUnit === "sales solutions" || businessUnit === "sales solutions operations") return "LSS";
+    if (businessUnit === "global sales operations") return jobFamily === "salesq vp" ? "Global" : "SD";
+  }
+
+  const peopleLob = text(people?.businessUnit);
+  const normalizedPeopleLob = normalizeText(peopleLob);
+  if (normalizedPeopleLob === "ts") return "LTS";
+  if (normalizedPeopleLob === "ms") return "LMS";
+  return displayOrUnmapped(peopleLob);
+}
+
+function buildDashboardBreakdown<TPopulation>(
+  people: TPopulation[],
+  verificationRows: VerificationResultRow[],
+  peopleLabel: (people: TPopulation) => string,
+  verificationLabel: (row: VerificationResultRow) => string,
+): DashboardBreakdownRow[] {
+  const byLabel = new Map<string, DashboardBreakdownRow>();
+  const getRow = (rawLabel: string): DashboardBreakdownRow => {
+    const label = rawLabel || "Unmapped";
+    const existing = byLabel.get(label);
+    if (existing) return existing;
+    const created = { label, employees: 0, required: 0, completed: 0, pending: 0, overdue: 0, inferred: 0 };
+    byLabel.set(label, created);
+    return created;
+  };
+
+  for (const person of people) getRow(peopleLabel(person)).employees += 1;
+  for (const verification of verificationRows) {
+    const row = getRow(verificationLabel(verification));
+    row.required += 1;
+    if (verification.progressStatus === "Completed") row.completed += 1;
+    if (verification.progressStatus === "Pending" || verification.progressStatus === "Partially Completed") row.pending += 1;
+    if (verification.slaStatus === "Overdue") row.overdue += 1;
+    if (verification.analystSource.startsWith("Inferred:")) row.inferred += 1;
+  }
+
+  return [...byLabel.values()].sort((left, right) => {
+    const employeeCompare = right.employees - left.employees;
+    if (employeeCompare !== 0) return employeeCompare;
+    const requiredCompare = right.required - left.required;
+    return requiredCompare !== 0 ? requiredCompare : left.label.localeCompare(right.label);
+  });
+}
+
+function countVerificationStatuses(rows: VerificationResultRow[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    counts[row.progressStatus] = (counts[row.progressStatus] ?? 0) + 1;
+    if (row.slaStatus === "Overdue") counts.Overdue = (counts.Overdue ?? 0) + 1;
+  }
+  return counts;
 }
 
 function applyHeaderStyle(sheet: WorkSheet): void {
@@ -705,11 +1557,24 @@ function applyHeaderStyle(sheet: WorkSheet): void {
   }
 }
 
-function buildColumnWidths(rows: Record<string, unknown>[]): ColInfo[] {
+function appendColumnGuide(wb: WorkBook, descriptions: Readonly<Record<string, string>>): void {
+  const rows = Object.entries(descriptions).map(([Column, Description]) => ({ Column, Description }));
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  applyHeaderStyle(sheet);
+  sheet["!cols"] = [{ wch: 32 }, { wch: 80 }];
+  for (let row = 2; row <= rows.length + 1; row += 1) {
+    const descriptionCell = sheet[`B${row}`];
+    if (descriptionCell) descriptionCell.s = { alignment: { vertical: "top", wrapText: true } };
+  }
+  XLSX.utils.book_append_sheet(wb, sheet, "Column Guide");
+}
+
+function buildColumnWidths(rows: object[]): ColInfo[] {
   if (rows.length === 0) return [];
-  const keys = Object.keys(rows[0]);
+  const records = rows as Record<string, unknown>[];
+  const keys = Object.keys(records[0]);
   return keys.map((key) => {
-    const maxValueLength = Math.max(key.length, ...rows.map((row) => String(row[key] ?? "").length));
+    const maxValueLength = Math.max(key.length, ...records.map((row) => String(row[key] ?? "").length));
     return { wch: Math.min(Math.max(maxValueLength + 2, 14), 36) };
   });
 }
@@ -806,7 +1671,8 @@ function resolveEmployeeContext(employeeId: string, data: AppData, countryToRegi
   const mappedScrRegion = scrCountry ? normalizeRegionValue(countryToRegion[scrCountry.toLowerCase()] ?? "") : "";
   const peopleRegion = normalizeRegionValue(people?.region ?? "");
   const region = displayOrUnmapped(mappedScrRegion || peopleRegion || normalizeRegionValue(loa?.region ?? "") || normalizeRegionValue(msft?.region ?? ""));
-  const lob = displayOrUnmapped(current?.businessUnit || previous?.businessUnit || "");
+  const lobScr = isYes(current?.activeStatus) ? current : isYes(previous?.activeStatus) ? previous : undefined;
+  const lob = deriveLob(lobScr, people);
 
   return {
     name: current?.fullName || previous?.fullName || people?.fullName || employeeId,
@@ -991,11 +1857,14 @@ function sortDisplayValues(values: Set<string>): string[] {
 function collectScrLobOptions(data: AppData): string[] {
   const lobSet = new Set<string>();
   for (const record of Object.values(data.currentScrById)) {
-    if (record.businessUnit && record.businessUnit !== "Unmapped") lobSet.add(record.businessUnit);
+    if (!isYes(record.activeStatus)) continue;
+    lobSet.add(deriveLob(record, data.peopleById[record.employeeId]));
   }
   for (const record of Object.values(data.previousScrById)) {
-    if (record.businessUnit && record.businessUnit !== "Unmapped") lobSet.add(record.businessUnit);
+    if (!isYes(record.activeStatus)) continue;
+    lobSet.add(deriveLob(record, data.peopleById[record.employeeId]));
   }
+  lobSet.delete("Unmapped");
   return sortDisplayValues(lobSet);
 }
 
