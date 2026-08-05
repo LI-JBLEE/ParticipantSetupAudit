@@ -2,9 +2,9 @@
 
 Last updated: 2026-08-05
 
-Existing deployed-code baseline before the Audit Subcategory update: `00d9743`
+Current Power Apps deployment: Git commit `3050db3`, deployed on 2026-08-05
 
-Current pre-SharePoint checkpoint: seven-day People verification, SCR-based manager dashboard, PDF/interactive HTML export, and Audit Subcategory propagation through Audit and Verification outputs.
+Current pre-SharePoint deployment: seven-day People verification, SCR-based manager dashboard, PDF/interactive HTML export, and Audit Subcategory propagation through Audit and Verification outputs.
 
 App UI version: `1.2`
 
