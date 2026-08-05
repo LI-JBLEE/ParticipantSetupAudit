@@ -1,10 +1,10 @@
 # Participant Setup Audit - App Handoff
 
-Last updated: 2026-07-29
+Last updated: 2026-08-05
 
-Latest committed app change commit before the current upgrade: `6a7a30e`
+Existing deployed-code baseline before the Audit Subcategory update: `00d9743`
 
-Current upgrade: seven-day People verification, SCR-based manager dashboard, and PDF/interactive HTML export.
+Current pre-SharePoint checkpoint: seven-day People verification, SCR-based manager dashboard, PDF/interactive HTML export, and Audit Subcategory propagation through Audit and Verification outputs.
 
 App UI version: `1.2`
 
@@ -68,12 +68,13 @@ Key files:
 3. Parsed data is stored in React state.
 4. Audit rules run in the browser.
 5. Results are shown on screen and can be exported to Excel.
+6. The deployed app currently has no SharePoint source-file archive connection; all source processing remains client-side.
 
 There is no backend and no server-side data processing.
 
 ## 5. Power Apps wrapper notes
 
-- The app is Power Apps wrapper-ready but currently runs as a normal Vite app.
+- The app is deployed as a Power Apps code app and can also run locally through Vite.
 - [power.config.json](/c:/Codex/PowerApps/Participant%20Setup%20Audit/participant-setup-audit-powerapp/power.config.json) contains the configured app and environment IDs.
 - `buildPath` is `./dist`.
 - The current local app URL in config is `http://localhost:5173`.
@@ -196,13 +197,18 @@ Relevant logic:
 
 ### LOB
 
-LOB resolution order:
+For active current-SCR employees, LOB is derived in this order:
 
-1. Current month SCR `Business Unit`
-2. Previous month SCR `Business Unit`
+1. Cost Center containing GCP -> `GCP`
+2. Job Family beginning with Sales Development -> `SD`
+3. Advertising Sales or Advertising Operations -> `LMS`
+4. LCS Sales or LCS Operations -> `LTS`
+5. Sales Solutions or Sales Solutions Operations -> `LSS`
+6. Global Sales Operations, except SalesQ VP -> `SD`
+7. Global Sales Operations with SalesQ VP -> `Global`
+8. Otherwise use People `Business_Unit`, displaying `TS` as `LTS` and `MS` as `LMS`
 
-Global filter LOB options are built only from SCR `Business Unit` values.
-People `Business_Unit` is not used for the LOB filter.
+The same derived LOB is used for filters, Dashboard population, and Analyst inference.
 
 ### Country
 
@@ -256,6 +262,11 @@ Important note:
 
 - The app still checks `OTE (Base+Comm)` changes for `changeSummary`.
 - However, the `previousOteBaseComm` and `currentOteBaseComm` output columns were removed from the report.
+- `auditSubcategory` is derived from the changed field set:
+  - Single-field changes use the corresponding `* Change Only` value.
+  - Multiple changes containing Commission Amount use `Variable + Other Changes`.
+  - Multiple changes without Commission Amount use `Multiple Changes - No Variable`.
+- The exact changed fields remain in `changeSummary`.
 
 ### Deferred Change While on LOA
 
@@ -353,6 +364,7 @@ Current visible output columns are defined in [App.tsx](/c:/Codex/PowerApps/Part
 
 Important output decisions:
 
+- `auditSubcategory` is placed immediately after `auditItem` in Audit and Verification tables.
 - Current month SCR `Active Status`, `On Leave`, and `First Day of Leave` are placed immediately after `Country`
 - `changeSummary` is placed immediately after the current month SCR LOA context columns
 - If current month SCR `On Leave = Yes`, `changeSummary` is prefixed with `[Currently on LOA]`
@@ -397,6 +409,7 @@ Sheets:
 
 - Uploaded file names
 - Audit counts by item
+- Audit counts by nonblank subcategory
 - Total row count
 
 ## 13. Current UI behaviors
@@ -415,6 +428,12 @@ Sheets:
 
 - Horizontal and vertical scrolling are intentionally confined to the Audit Results frame.
 - The entire page should no longer grow a global results scrollbar when the table becomes wide or tall.
+
+### Audit Subcategory
+
+- Audit Results and Follow-up Verification tables display `Audit Subcategory` next to `Audit Item`.
+- `Variable Change Only` and `Variable + Other Changes` identify every audit action that requires an Annual Variable update.
+- `Manager Change Only` continues to use the separate `Manager Mismatch Only` verification treatment and remains outside Setup Required and Completion Rate.
 
 ## 14. Known sample-data observations
 
@@ -443,6 +462,9 @@ Examples already verified:
 - People metadata fields populate the report when the People record exists
 - `Commission Amount` exports as numeric
 - `OTE (Base+Comm)` columns are removed from the report
+- Audit Subcategory is carried from Audit Report to Verification Baseline and Verification Report
+- Older Verification Baselines without Audit Subcategory derive it from their field keys
+- The July workbook's 1,108 Change to Existing Participant rows classify as 692 Manager Change Only, 216 Variable Change Only, 173 Variable + Other Changes, 13 Multiple Changes - No Variable, and 14 Job Title Change Only
 
 ## 16. Common change locations
 
@@ -535,6 +557,18 @@ Actual People `Analyst_Name` remains authoritative except for Transfer to Sales,
 
 The baseline and follow-up reports retain `analystSource`, `analystConfidence`, and `analystSampleSize`. Inference affects dashboard ownership only and never writes back to People.
 
+### Audit Subcategory propagation
+
+- `auditItem` remains the stable parent action.
+- `auditSubcategory` is stored in Audit Report, Verification Baseline, Verification Report, and Field Details.
+- `changeSummary` remains the detailed list of changed fields.
+- Verification Summary includes counts by Audit Subcategory.
+- Dashboard Setup Required and Completion Rate calculations remain status-based and are not changed by the new classification.
+
 ### LOB derivation
 
 For active current-SCR employees, apply this priority: Cost Center containing GCP -> GCP; Job Family beginning with Sales Development -> SD; Advertising Sales/Operations -> LMS; LCS Sales/Operations -> LTS; Sales Solutions/Operations -> LSS; Global Sales Operations -> SD except SalesQ VP -> Global. Otherwise use People `Business_Unit`, displaying TS as LTS and MS as LMS.
+
+## 19. Planned SharePoint source-file archive
+
+Not implemented in this checkpoint. The recommended future design is a solution-aware Power Automate flow triggered by the code app after a successful audit. It should create a unique processing-month/run folder and save the eight original input files without overwriting prior runs. Implementation requires the SharePoint site URL, document library, parent folder, connection reference, tenant permissions, and an upgrade of `@microsoft/power-apps` from `1.0.3` to at least `1.1.1`.

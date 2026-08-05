@@ -38,6 +38,7 @@ import type {
 
 const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "auditItem", label: "Audit Item" },
+  { key: "auditSubcategory", label: "Audit Subcategory" },
   { key: "employeeId", label: "Employee ID" },
   { key: "employeeName", label: "Employee Name" },
   { key: "region", label: "Region" },
@@ -85,6 +86,7 @@ const VERIFICATION_COLUMNS: Array<{ key: keyof VerificationResultRow; label: str
   { key: "employeeId", label: "Employee ID" },
   { key: "employeeName", label: "Employee Name" },
   { key: "auditItem", label: "Audit Item" },
+  { key: "auditSubcategory", label: "Audit Subcategory" },
   { key: "region", label: "Region" },
   { key: "lob", label: "LOB" },
   { key: "analystName", label: "Analyst" },
@@ -687,6 +689,7 @@ function App() {
                 <li>Upload all eight required source files shown in the workspace.</li>
                 <li>Adjust Region, LOB, or Country filters if Select All is not required.</li>
                 <li>Click Generate Report, review warnings, and validate the Audit Results.</li>
+                <li>Use Audit Subcategory to separate single-field changes, Variable + Other Changes, and Multiple Changes without Variable.</li>
                 <li>Download the Excel file for analyst action and later verification.</li>
               </ol>
               <p className="instruction-note">
@@ -701,7 +704,7 @@ function App() {
                 <li>After approximately seven days, select Follow-up Verification.</li>
                 <li>Upload the original audit output and the latest People file.</li>
                 <li>Click Generate Verification to compare the latest People values with the initial baseline.</li>
-                <li>Review the result tiles and download the Verification Excel file.</li>
+                <li>Review the result tiles and Audit Subcategory, then download the Verification Excel file.</li>
               </ol>
               <p className="instruction-note">
                 The workbook includes Verification Report, Column Guide, Field Details, and Summary.
@@ -747,6 +750,7 @@ function App() {
                 <li>Completion Rate = Completed / Setup Required.</li>
                 <li>Missing Analyst assignments use Country + LOB, then Region + LOB; ties remain Unassigned.</li>
                 <li>New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst.</li>
+                <li>Variable Change Only and Variable + Other Changes both require the Annual Variable update to be verified.</li>
               </ul>
             </article>
 

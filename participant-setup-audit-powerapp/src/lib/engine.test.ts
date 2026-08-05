@@ -7,6 +7,7 @@ import {
   buildFollowUpVerification,
   buildFollowUpWorkbook,
   createEmptyAppData,
+  deriveAuditSubcategory,
   parseScrFile,
   parseVerificationBaselineFile,
   summarizeSetupExecution,
@@ -64,6 +65,7 @@ const base = {
   analystConfidence: "Confirmed",
   analystSampleSize: 0,
   auditItem: "Change to Existing Participant",
+  auditSubcategory: "",
   baselineValue: "",
   deferred: "No",
   note: "",
@@ -114,6 +116,16 @@ if (partial?.progressStatus !== "Partially Completed" || partial.slaStatus !== "
 }
 if (managerOnly?.progressStatus !== "Manager Mismatch Only" || managerOnly.slaStatus !== "Not Applicable") {
   throw new Error("Expected a manager-only mismatch outside setup execution and SLA counts.");
+}
+if (managerOnly.auditSubcategory !== "Manager Change Only") {
+  throw new Error("Expected an old baseline without a subcategory to derive Manager Change Only.");
+}
+if (
+  deriveAuditSubcategory(["Commission Amount"]) !== "Variable Change Only" ||
+  deriveAuditSubcategory(["Job Title", "Commission Amount"]) !== "Variable + Other Changes" ||
+  deriveAuditSubcategory(["Job Title", "Supervisory Manager"]) !== "Multiple Changes - No Variable"
+) {
+  throw new Error("Audit subcategory classification did not preserve Variable change visibility.");
 }
 const executionSummary = summarizeSetupExecution(result.rows);
 if (
@@ -503,6 +515,49 @@ if (statusAudit.rows.find((row) => row.employeeId === transferOutEmployeeId)?.au
 }
 if (statusAudit.rows.find((row) => row.employeeId === terminatedEmployeeId)?.auditItem !== "Termination") {
   throw new Error("A blank current SCR Active Status was not classified as Termination.");
+}
+
+const changedEmployeeId = "000111";
+const changeData = createEmptyAppData();
+changeData.previousScrById[changedEmployeeId] = scr(changedEmployeeId, new Date(2020, 0, 1), "Changed Employee");
+changeData.currentScrById[changedEmployeeId] = {
+  ...changeData.previousScrById[changedEmployeeId],
+  jobTitle: "Senior Account Executive",
+  commissionAmount: 75,
+};
+changeData.peopleById[changedEmployeeId] = { ...people, employeeId: changedEmployeeId, fullName: "Changed Employee" };
+changeData.positionById[changedEmployeeId] = {
+  employeeId: changedEmployeeId,
+  positionName: "Changed Employee (000111)",
+  personName: "Changed Employee (000111)",
+  title: "Senior Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2020, 0, 1),
+};
+const changeAudit = buildAuditReport("JUL-2026", filters, changeData, countryToRegion, new Date(2026, 6, 16));
+const changeRow = changeAudit.rows.find((row) => row.employeeId === changedEmployeeId);
+if (
+  changeRow?.auditItem !== "Change to Existing Participant" ||
+  changeRow.auditSubcategory !== "Variable + Other Changes" ||
+  changeAudit.expectations.some((item) => item.auditSubcategory !== "Variable + Other Changes")
+) {
+  throw new Error("Audit and Verification Baseline did not carry the Variable + Other Changes subcategory.");
+}
+const changeVerification = buildFollowUpVerification(
+  changeAudit.expectations,
+  {
+    [changedEmployeeId]: {
+      ...people,
+      employeeId: changedEmployeeId,
+      fullName: "Changed Employee",
+      hrJobTitle: "Senior Account Executive",
+      annualVariable: 75,
+    },
+  },
+  new Date(2026, 6, 22),
+);
+if (changeVerification.rows[0]?.auditSubcategory !== "Variable + Other Changes") {
+  throw new Error("Verification Report did not retain the audit subcategory.");
 }
 
 const transferEmployeeId = "000085";

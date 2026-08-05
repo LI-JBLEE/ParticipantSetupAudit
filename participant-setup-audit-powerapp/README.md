@@ -1,6 +1,6 @@
 # Participant Setup Audit
 
-React + TypeScript app for generating the Participant Setup Audit report, verifying People updates after seven days, and monitoring setup execution entirely in the browser.
+React + TypeScript Power Apps code app for generating the Participant Setup Audit report, verifying People updates after seven days, and monitoring setup execution entirely in the browser.
 
 ## Run
 
@@ -18,7 +18,7 @@ npm run build
 
 1. All uploaded files are parsed in the front end.
 2. Audit logic runs in the browser without server-side processing.
-3. Power Apps can wrap the built app later through the Code App flow.
+3. The built app is deployed as the `Participant Setup Audit` Power Apps code app.
 
 ## Required uploads
 
@@ -41,6 +41,20 @@ npm run build
    - `Verification Baseline` sheet
    - `SCR Population` sheet
 
+`Audit Report` includes `auditSubcategory` immediately after `auditItem`. Participant changes use controlled operational subcategories:
+
+- `Manager Change Only`
+- `Variable Change Only`
+- `Variable + Other Changes`
+- `Job Title Change Only`
+- `OTE Change Only`
+- `Business Unit Change Only`
+- `Country Change Only`
+- `Currency Change Only`
+- `Multiple Changes - No Variable`
+
+The exact changed fields remain in `changeSummary`.
+
 ## Follow-up verification
 
 1. Generate and download the initial audit workbook.
@@ -48,7 +62,7 @@ npm run build
 3. Upload the initial audit workbook and the latest People file.
 4. Generate the verification report and review `Completed`, `Partially Completed`, `Pending`, `Manager Mismatch Only`, and SLA status.
 
-The verification workbook includes `Verification Report`, `Column Guide`, `Field Details`, and `Summary`.
+The verification workbook includes `Verification Report`, `Column Guide`, `Field Details`, and `Summary`. `auditSubcategory` is carried from the initial audit through the Verification Baseline and into the Verification Report. Older audit workbooks without this column derive it from their verification field set.
 
 Business Unit, Position, and OKR changes remain `Not Verifiable` when the People-only follow-up does not contain an approved direct mapping.
 
@@ -65,3 +79,9 @@ When a setup target has no People `Analyst_Name`, the dashboard infers ownership
 3. Ties remain `Unassigned`
 
 New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst. Inferred assignments are labeled with source, confidence, and sample size; they do not overwrite People data.
+
+## Deployment checkpoint
+
+- Power Apps app ID: `c57dffff-3ceb-4d92-893b-d91f2b67de6c`
+- Existing deployed-code baseline before the Audit Subcategory update: `00d9743`
+- The current GitHub checkpoint includes the Audit Subcategory update and intentionally excludes the proposed SharePoint source-file archive feature.

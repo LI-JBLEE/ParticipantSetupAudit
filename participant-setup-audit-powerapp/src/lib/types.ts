@@ -133,6 +133,7 @@ export interface FilterOptions {
 
 export interface AuditRow {
   auditItem: string;
+  auditSubcategory: string;
   processingMonth: string;
   employeeId: string;
   employeeName: string;
@@ -198,6 +199,7 @@ export interface VerificationExpectation {
   analystConfidence: string;
   analystSampleSize: number;
   auditItem: string;
+  auditSubcategory: string;
   fieldKey: string;
   fieldLabel: string;
   baselineValue: string;
@@ -235,6 +237,7 @@ export interface VerificationResultRow {
   analystConfidence: string;
   analystSampleSize: number;
   auditItem: string;
+  auditSubcategory: string;
   progressStatus: VerificationProgressStatus;
   slaStatus: VerificationSlaStatus;
   baselineGeneratedAt: string;

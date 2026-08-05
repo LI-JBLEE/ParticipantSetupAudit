@@ -38,6 +38,7 @@ const NEGATIVE_BALANCE_MATERIALITY_THRESHOLD = 1;
 
 const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   auditItem: "Consolidated audit action or issue identified for the employee.",
+  auditSubcategory: "Operational subtype of a participant change, separating variable-related and other change patterns.",
   processingMonth: "Month selected when the audit was generated.",
   employeeId: "Unique employee identifier.",
   employeeName: "Employee's full name.",
@@ -93,6 +94,7 @@ const VERIFICATION_COLUMN_DESCRIPTIONS: Record<keyof VerificationResultRow, stri
   analystConfidence: "Confidence percentage for an inferred analyst assignment.",
   analystSampleSize: "Number of existing employees supporting the inferred analyst assignment.",
   auditItem: "Audit action or issue carried forward from the initial audit.",
+  auditSubcategory: "Operational change subtype carried forward from the initial audit baseline.",
   progressStatus: "Overall result: Completed, Partially Completed, Pending, Manager Mismatch Only, Deferred, or Not Verifiable.",
   slaStatus: "Timeliness result based on the due date and follow-up People snapshot.",
   baselineGeneratedAt: "Date and time when the initial verification baseline was generated.",
@@ -634,6 +636,7 @@ export function buildAuditReport(
           current.fullName || context.name,
           context,
           {
+            auditSubcategory: deriveAuditSubcategory(changes.map((item) => item.label)),
             previousJobTitle: hasChanged(changes, "Job Title") ? previous.jobTitle : "",
             currentJobTitle: hasChanged(changes, "Job Title") ? current.jobTitle : "",
             previousSupervisoryManager: hasChanged(changes, "Supervisory Manager") ? previous.supervisoryManager : "",
@@ -816,6 +819,11 @@ export function buildAuditWorkbook(
     ...Object.entries(fileNames).map(([key, value]) => ({ Section: "Uploaded File", Name: key, Value: value })),
     ...Object.entries(countByAuditItem(rows)).map(([key, value]) => ({ Section: "Audit Count", Name: key, Value: value })),
     { Section: "Audit Count", Name: "Total Rows", Value: rows.length },
+    ...Object.entries(countByAuditSubcategory(rows)).map(([key, value]) => ({
+      Section: "Audit Subcategory Count",
+      Name: key,
+      Value: value,
+    })),
   ];
   const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
   applyHeaderStyle(summarySheet);
@@ -894,6 +902,7 @@ export async function parseVerificationBaselineFile(
       analystConfidence: text(row.analystConfidence),
       analystSampleSize: toNumber(row.analystSampleSize) ?? 0,
       auditItem: text(row.auditItem),
+      auditSubcategory: text(row.auditSubcategory),
       fieldKey: text(row.fieldKey),
       fieldLabel: text(row.fieldLabel),
       baselineValue: text(row.baselineValue),
@@ -969,6 +978,7 @@ export function buildFollowUpVerification(
     const verifiable = results.filter((result) => result.rule !== "unverifiable");
     const completed = verifiable.filter((result) => result.matched === "Yes");
     const deferred = results.some((result) => isYes(result.deferred));
+    const auditSubcategory = first.auditSubcategory || deriveVerificationSubcategory(results);
     const managerMismatchOnly =
       first.auditItem === "Change to Existing Participant" &&
       results.length === 1 &&
@@ -1008,6 +1018,7 @@ export function buildFollowUpVerification(
       analystConfidence: first.analystConfidence,
       analystSampleSize: first.analystSampleSize,
       auditItem: first.auditItem,
+      auditSubcategory,
       progressStatus,
       slaStatus,
       baselineGeneratedAt: first.generatedAt,
@@ -1062,6 +1073,11 @@ export function buildFollowUpWorkbook(
       Value: value,
     })),
     { Section: "Verification Status", Name: "Total Rows", Value: result.rows.length },
+    ...Object.entries(countByVerificationSubcategory(result.rows)).map(([key, value]) => ({
+      Section: "Audit Subcategory Count",
+      Name: key,
+      Value: value,
+    })),
   ];
   const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
   applyHeaderStyle(summarySheet);
@@ -1206,6 +1222,7 @@ function buildVerificationExpectations(
         analystConfidence: analystAssignment.confidence,
         analystSampleSize: analystAssignment.sampleSize,
         auditItem: row.auditItem,
+        auditSubcategory: row.auditSubcategory,
         fieldKey,
         fieldLabel,
         baselineValue: getPeopleVerificationValue(people, fieldKey),
@@ -1585,6 +1602,22 @@ function countByAuditItem(rows: AuditRow[]): Record<string, number> {
   return counts;
 }
 
+function countByAuditSubcategory(rows: AuditRow[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.auditSubcategory) counts[row.auditSubcategory] = (counts[row.auditSubcategory] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function countByVerificationSubcategory(rows: VerificationResultRow[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.auditSubcategory) counts[row.auditSubcategory] = (counts[row.auditSubcategory] ?? 0) + 1;
+  }
+  return counts;
+}
+
 function createAuditRow(
   auditItem: string,
   processingMonth: string,
@@ -1600,6 +1633,7 @@ function createAuditRow(
     : mergedChangeSummary;
   return {
     auditItem,
+    auditSubcategory: "",
     processingMonth,
     employeeId,
     employeeName,
@@ -1760,6 +1794,46 @@ function compareField(label: string, previous: unknown, current: unknown): { lab
     return { label, changed: !numbersEqual(toNumber(previous), toNumber(current)) };
   }
   return { label, changed: normalizeText(previous) !== normalizeText(current) };
+}
+
+export function deriveAuditSubcategory(changeLabels: readonly string[]): string {
+  const labels = [...new Set(changeLabels.filter(Boolean))];
+  if (labels.length === 0) return "";
+  if (labels.length > 1) {
+    return labels.includes("Commission Amount") ? "Variable + Other Changes" : "Multiple Changes - No Variable";
+  }
+  return (
+    {
+      "Job Title": "Job Title Change Only",
+      "Supervisory Manager": "Manager Change Only",
+      "OTE (Base+Comm)": "OTE Change Only",
+      "Commission Amount": "Variable Change Only",
+      "Business Unit": "Business Unit Change Only",
+      Country: "Country Change Only",
+      Currency: "Currency Change Only",
+    }[labels[0] ?? ""] ?? "Other Change Only"
+  );
+}
+
+function deriveVerificationSubcategory(results: VerificationFieldResult[]): string {
+  const auditItem = results[0]?.auditItem ?? "";
+  if (
+    auditItem !== "Change to Existing Participant" &&
+    auditItem !== "Deferred Change While on LOA" &&
+    auditItem !== "LOA Return with Participant Changes"
+  ) {
+    return "";
+  }
+  const changeLabelByFieldKey: Record<string, string> = {
+    hrJobTitle: "Job Title",
+    level1Manager: "Supervisory Manager",
+    salary: "OTE (Base+Comm)",
+    annualVariable: "Commission Amount",
+    businessUnit: "Business Unit",
+    country: "Country",
+    salaryCurrency: "Currency",
+  };
+  return deriveAuditSubcategory(results.map((result) => changeLabelByFieldKey[result.fieldKey]).filter(Boolean));
 }
 
 function isNewHireInProcessingWindow(record: ScrRecord, startDate: Date, endDate: Date): boolean {
