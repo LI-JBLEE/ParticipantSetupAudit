@@ -750,6 +750,7 @@ function App() {
                 <li>Completion Rate = Completed / Setup Required.</li>
                 <li>Missing Analyst assignments use Country + LOB, then Region + LOB; ties remain Unassigned.</li>
                 <li>New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst.</li>
+                <li>In Audit Excel, a light yellow Analyst Name cell marks an inferred assignment.</li>
                 <li>Variable Change Only and Variable + Other Changes both require the Annual Variable update to be verified.</li>
               </ul>
             </article>

@@ -51,7 +51,7 @@ const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   changeSummary: "Brief explanation of the setup action, change, or data issue detected.",
   peoplePlanEffectiveDate: "Current plan effective date in the People record.",
   peopleBusinessUnit: "Current Business_Unit value in the People record.",
-  analystName: "Analyst assigned or inferred to own the setup action.",
+  analystName: "Analyst assigned or inferred to own the setup action. Light yellow cells indicate an inferred assignment.",
   planType: "Current plan type in the People record.",
   hireDate: "Hire date relevant to a new-hire or rehire audit item.",
   terminationDate: "Termination date relevant to a termination audit item.",
@@ -540,7 +540,18 @@ export function buildAuditReport(
       )
       .map(([employeeId]) => employeeId),
   );
-  const transferAnalystIndex = buildAnalystInferenceIndex(data, countryToRegion, transferToSalesIds);
+  const newHireIds = new Set(
+    Object.values(data.currentScrById)
+      .filter(
+        (current) =>
+          isYes(current.activeStatus) &&
+          (!current.terminationDate || isRehireNewHire(current)) &&
+          isNewHireInProcessingWindow(current, newHireStart, newHireEnd),
+      )
+      .map((current) => current.employeeId),
+  );
+  const inferredOwnershipIds = new Set([...newHireIds, ...transferToSalesIds]);
+  const analystInferenceIndex = buildAnalystInferenceIndex(data, countryToRegion, inferredOwnershipIds);
 
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
@@ -554,8 +565,16 @@ export function buildAuditReport(
     const missingPeople = !people;
     const missingPosition = !position;
     const materialNegativeBalance = people && balance ? formatMaterialNegativeBalance(balance) : "";
+    const analystAssignment = resolveAnalystAssignment(
+      current.employeeId,
+      data,
+      countryToRegion,
+      analystInferenceIndex,
+      true,
+    );
     rows.push(
       createAuditRow("New Hire", processingMonth, current.employeeId, current.fullName || context.name, context, {
+        analystName: analystAssignment.name,
         hireDate: formatDate(current.hireDate),
         currentJobTitle: current.jobTitle,
         currentBusinessUnit: current.businessUnit,
@@ -726,7 +745,7 @@ export function buildAuditReport(
       employeeId,
       data,
       countryToRegion,
-      transferAnalystIndex,
+      analystInferenceIndex,
       true,
     );
     rows.push(
@@ -806,6 +825,22 @@ export function buildAuditWorkbook(
   const reportRows = rows.map((row) => ({ ...row }));
   const reportSheet = XLSX.utils.json_to_sheet(reportRows);
   applyHeaderStyle(reportSheet);
+  if (reportRows.length > 0) {
+    const analystColumn = Object.keys(reportRows[0]).indexOf("analystName");
+    const inferredVerificationIds = new Set(
+      expectations
+        .filter((expectation) => expectation.analystSource.startsWith("Inferred:"))
+        .map((expectation) => expectation.verificationId),
+    );
+    if (analystColumn >= 0) {
+      reportRows.forEach((row, rowIndex) => {
+        const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
+        if (!inferredVerificationIds.has(verificationId)) return;
+        const cell = reportSheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: analystColumn })];
+        if (cell) cell.s = { ...(cell.s ?? {}), fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } } };
+      });
+    }
+  }
   reportSheet["!autofilter"] = {
     ref: XLSX.utils.encode_range(
       reportSheet["!ref"] ? XLSX.utils.decode_range(reportSheet["!ref"]) : { s: { c: 0, r: 0 }, e: { c: 0, r: 0 } },
@@ -1117,10 +1152,10 @@ export function buildDashboardModel(
   selectedRegion = "All Regions",
 ): DashboardModel {
   const analystData: AnalystData = { peopleById, currentScrById, previousScrById: {} };
-  const transferToSalesIds = new Set(
-    verificationRows.filter((row) => isTransferToSalesAuditItem(row.auditItem)).map((row) => row.employeeId),
+  const inferredOwnershipIds = new Set(
+    verificationRows.filter((row) => isInferredOwnershipAuditItem(row.auditItem)).map((row) => row.employeeId),
   );
-  const analystIndex = buildAnalystInferenceIndex(analystData, countryToRegion, transferToSalesIds);
+  const analystIndex = buildAnalystInferenceIndex(analystData, countryToRegion, inferredOwnershipIds);
   const commissioned = Object.values(currentScrById)
     .filter((current) => isYes(current.activeStatus))
     .map((current) => ({
@@ -1131,7 +1166,7 @@ export function buildDashboardModel(
         analystData,
         countryToRegion,
         analystIndex,
-        transferToSalesIds.has(current.employeeId),
+        inferredOwnershipIds.has(current.employeeId),
       ).name,
     }));
   const regionOptions = sortDisplayValues(new Set(commissioned.map((person) => person.region)));
@@ -1177,10 +1212,10 @@ function buildVerificationExpectations(
   generatedAt: Date,
 ): VerificationExpectation[] {
   const expectations: VerificationExpectation[] = [];
-  const transferToSalesIds = new Set(
-    rows.filter((row) => isTransferToSalesAuditItem(row.auditItem)).map((row) => row.employeeId),
+  const inferredOwnershipIds = new Set(
+    rows.filter((row) => isInferredOwnershipAuditItem(row.auditItem)).map((row) => row.employeeId),
   );
-  const analystIndex = buildAnalystInferenceIndex(data, countryToRegion, transferToSalesIds);
+  const analystIndex = buildAnalystInferenceIndex(data, countryToRegion, inferredOwnershipIds);
   const generatedAtText = generatedAt.toISOString();
   const dueDateValue = new Date(generatedAt);
   dueDateValue.setDate(dueDateValue.getDate() + 7);
@@ -1196,7 +1231,7 @@ function buildVerificationExpectations(
       data,
       countryToRegion,
       analystIndex,
-      isTransferToSalesAuditItem(row.auditItem),
+      isInferredOwnershipAuditItem(row.auditItem),
     );
     const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
     const deferred = row.auditItem === "Deferred Change While on LOA" ? "Yes" : "No";
@@ -1490,6 +1525,10 @@ function analystKey(first: string, lob: string): string {
 
 function isTransferToSalesAuditItem(auditItem: string): boolean {
   return auditItem === "Transfer to Sales" || auditItem === "Transfer to Sales - Xactly Setup Required";
+}
+
+function isInferredOwnershipAuditItem(auditItem: string): boolean {
+  return auditItem === "New Hire" || isTransferToSalesAuditItem(auditItem);
 }
 
 function dashboardRegion(value: string): string {

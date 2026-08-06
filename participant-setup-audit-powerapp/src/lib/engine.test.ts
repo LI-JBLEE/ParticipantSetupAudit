@@ -417,7 +417,17 @@ for (const [lob, expected] of Object.entries(expectedLobCounts)) {
 
 const inferenceData = createEmptyAppData();
 const secondPeople = { ...people, employeeId: "000082", fullName: "Second Employee" };
-inferenceData.peopleById = { [people.employeeId]: people, [secondPeople.employeeId]: secondPeople };
+const historicalNewHirePeople = {
+  ...people,
+  employeeId: "000083",
+  fullName: "New Employee",
+  analystName: "Historical Analyst",
+};
+inferenceData.peopleById = {
+  [people.employeeId]: people,
+  [secondPeople.employeeId]: secondPeople,
+  [historicalNewHirePeople.employeeId]: historicalNewHirePeople,
+};
 inferenceData.currentScrById = {
   [people.employeeId]: scr(people.employeeId, new Date(2020, 0, 1), people.fullName),
   [secondPeople.employeeId]: scr(secondPeople.employeeId, new Date(2020, 0, 1), secondPeople.fullName),
@@ -450,13 +460,15 @@ const inferredAudit = buildAuditReport(
   new Date(2026, 6, 16),
 );
 const inferredExpectation = inferredAudit.expectations.find((item) => item.employeeId === "000083");
+const inferredAuditRow = inferredAudit.rows.find((item) => item.employeeId === "000083");
 if (
+  inferredAuditRow?.analystName !== people.analystName ||
   inferredExpectation?.analystName !== people.analystName ||
   inferredExpectation.analystSource !== "Inferred: Country + LOB" ||
   inferredExpectation.analystConfidence !== "100%" ||
   inferredExpectation.analystSampleSize !== 2
 ) {
-  throw new Error("Country + LOB analyst inference did not select the expected unique leader.");
+  throw new Error("New Hire analyst inference did not replace the historical assignment with the expected unique leader.");
 }
 const regionalExpectation = inferredAudit.expectations.find((item) => item.employeeId === "000084");
 if (
@@ -468,15 +480,32 @@ if (
 const inferenceDashboard = buildDashboardModel(
   inferenceData.currentScrById,
   inferenceData.peopleById,
-  [],
+  buildFollowUpVerification(inferredAudit.expectations, inferenceData.peopleById).rows,
   { australia: "APAC", singapore: "APAC" },
   "APAC",
 );
 if (
   inferenceDashboard.commissionedEmployees !== 4 ||
-  inferenceDashboard.byAnalyst.find((row) => row.label === people.analystName)?.employees !== 4
+  inferenceDashboard.byAnalyst.find((row) => row.label === people.analystName)?.employees !== 4 ||
+  inferenceDashboard.byAnalyst.some((row) => row.label === historicalNewHirePeople.analystName && row.employees > 0)
 ) {
   throw new Error("SCR-based Dashboard did not retain inferred Analyst ownership for commissioned employees.");
+}
+const inferredWorkbook = XLSX.read(
+  buildAuditWorkbook(inferredAudit.rows, {}, inferredAudit.expectations, inferenceData.currentScrById),
+  { type: "array", cellStyles: true },
+);
+const inferredReportSheet = inferredWorkbook.Sheets["Audit Report"];
+const inferredReportRows = XLSX.utils.sheet_to_json<string[]>(inferredReportSheet, { header: 1, defval: "" });
+const inferredHeaders = inferredReportRows[0] ?? [];
+const inferredRowIndex = inferredReportRows.findIndex(
+  (row) => String(row[inferredHeaders.indexOf("employeeId")]) === "000083",
+);
+const inferredAnalystCell = inferredReportSheet[
+  XLSX.utils.encode_cell({ r: inferredRowIndex, c: inferredHeaders.indexOf("analystName") })
+] as { s?: { patternType?: string; fgColor?: { rgb?: string } } } | undefined;
+if (inferredAnalystCell?.s?.patternType !== "solid" || inferredAnalystCell.s.fgColor?.rgb !== "FFF2CC") {
+  throw new Error("Inferred Analyst Name cells are not highlighted light yellow in Audit Excel.");
 }
 
 const filters = { regions: ["APAC"], lobs: ["LSS"], countries: ["Singapore"] };
