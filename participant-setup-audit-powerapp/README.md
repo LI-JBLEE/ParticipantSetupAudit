@@ -83,5 +83,5 @@ New Hire and Transfer to Sales use inferred ownership instead of the employee's 
 ## Deployment checkpoint
 
 - Power Apps app ID: `c57dffff-3ceb-4d92-893b-d91f2b67de6c`
-- Current Power Apps deployment: Git commit `3050db3`, deployed on 2026-08-05
-- The deployment includes the Audit Subcategory update and intentionally excludes the proposed SharePoint source-file archive feature.
+- Current Power Apps deployment: Git commit `1b92e4a`, deployed on 2026-08-26
+- The deployment includes Audit Subcategory propagation, inferred analyst ownership, and CSV Quota Assignment support, and intentionally excludes the proposed SharePoint source-file archive feature.

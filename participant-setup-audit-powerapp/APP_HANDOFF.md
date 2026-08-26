@@ -1,10 +1,10 @@
 # Participant Setup Audit - App Handoff
 
-Last updated: 2026-08-05
+Last updated: 2026-08-26
 
-Current Power Apps deployment: Git commit `3050db3`, deployed on 2026-08-05
+Current Power Apps deployment: Git commit `1b92e4a`, deployed on 2026-08-26
 
-Current pre-SharePoint deployment: seven-day People verification, SCR-based manager dashboard, PDF/interactive HTML export, and Audit Subcategory propagation through Audit and Verification outputs.
+Current pre-SharePoint deployment: seven-day People verification, SCR-based manager dashboard, PDF/interactive HTML export, Audit Subcategory propagation, inferred analyst ownership, and CSV Quota Assignment support.
 
 App UI version: `1.2`
 
