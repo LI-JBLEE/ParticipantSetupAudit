@@ -113,7 +113,7 @@ const REQUIRED_UPLOADS: UploadDefinition[] = [
   { key: "previousScr", label: "Sales Compensation Report (Previous Month)", accept: ".xlsx,.xls" },
   { key: "people", label: "People", accept: ".xlsx,.xls" },
   { key: "position", label: "Position", accept: ".xlsx,.xls" },
-  { key: "quota", label: "Quota Assignment", accept: ".xlsx,.xls" },
+  { key: "quota", label: "Quota Assignment", accept: ".xlsx,.xls,.csv" },
   { key: "balance", label: "Payment Balance", accept: ".xls,.xlsx" },
   { key: "loa", label: "LOA Report", accept: ".xlsx,.xls" },
   { key: "msftTransfer", label: "Transfer to MSFT", accept: ".xlsx,.xls" },
@@ -2019,7 +2019,7 @@ function extractMonthColumns(headerRow: string[]): Record<string, number> {
 }
 
 async function readMatrixFromFile(file: File, sheetIndex: number): Promise<unknown[][]> {
-  const workbook = normalizeWorkbookRanges(XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false }));
+  const workbook = normalizeWorkbookRanges(XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false, raw: true }));
   const sheetName = workbook.SheetNames[sheetIndex];
   if (!sheetName) throw new Error("No worksheet found in the uploaded file.");
   const sheet = workbook.Sheets[sheetName];

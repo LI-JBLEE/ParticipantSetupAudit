@@ -8,6 +8,7 @@ import {
   buildFollowUpWorkbook,
   createEmptyAppData,
   deriveAuditSubcategory,
+  parseQuotaAssignmentFile,
   parseScrFile,
   parseVerificationBaselineFile,
   summarizeSetupExecution,
@@ -185,6 +186,40 @@ if (
   parsedScr.data["000100"]?.costCenter !== "NAMER GCP Enterprise"
 ) {
   throw new Error("SCR parser did not select the exact Job Family and Cost Center columns.");
+}
+
+const quotaMatrix = [
+  ["# Quota Name", "Type", "Name", "Person Name (Employee ID)", "Effective Start Date", "JUL-2026", "AUG-2026"],
+  ["OKR Quota", "Position", "OKR Quota", "Nitya Rao (245203)", "2026-07-01", 7160.3775, 0],
+];
+const quotaCsv = quotaMatrix.map((row) => row.join(",")).join("\n");
+const quotaWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(quotaWorkbook, XLSX.utils.aoa_to_sheet(quotaMatrix), "Quota Assignment");
+const [parsedQuotaCsv, parsedQuotaXlsx] = await Promise.all([
+  parseQuotaAssignmentFile(new File([quotaCsv], "quota.csv", { type: "text/csv" })),
+  parseQuotaAssignmentFile(new File([XLSX.write(quotaWorkbook, { type: "array", bookType: "xlsx" })], "quota.xlsx")),
+]);
+const csvQuotaRow = parsedQuotaCsv.data[0];
+const xlsxQuotaRow = parsedQuotaXlsx.data[0];
+if (
+  csvQuotaRow?.monthValues["JUL-2026"] !== 7160.3775 ||
+  csvQuotaRow.monthValues["AUG-2026"] !== 0 ||
+  JSON.stringify(csvQuotaRow.monthValues) !== JSON.stringify(xlsxQuotaRow?.monthValues)
+) {
+  throw new Error("Quota CSV month columns did not parse like XLSX month columns.");
+}
+const okrData = createEmptyAppData();
+okrData.quotaRows = parsedQuotaCsv.data;
+okrData.peopleById["245203"] = { ...people, employeeId: "245203", fullName: "Nitya Rao" };
+const okrAudit = buildAuditReport(
+  "AUG-2026",
+  { regions: ["APAC"], lobs: ["LTS"], countries: ["Singapore"] },
+  okrData,
+  { singapore: "APAC" },
+  new Date(2026, 7, 20),
+);
+if (!okrAudit.rows.some((row) => row.employeeId === "245203" && row.auditItem === "OKR Plan End")) {
+  throw new Error("Quota CSV did not produce the expected August OKR Plan End audit row.");
 }
 
 const dashboardActiveScr = {
