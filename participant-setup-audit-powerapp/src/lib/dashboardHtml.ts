@@ -2,16 +2,46 @@ import type { DashboardModel } from "./types";
 
 type DashboardModels = Record<string, DashboardModel>;
 
+interface DashboardHtmlView {
+  snapshot: string;
+  kpis: string;
+  analystTable: string;
+  regionBars: string;
+  lobBars: string;
+  lobTable: string;
+}
+
 export function buildDashboardHtml(
   models: DashboardModels,
   selectedRegion: string,
   processingMonth: string,
 ): string {
-  const serializedModels = JSON.stringify(models)
+  const initialRegion = models[selectedRegion] ? selectedRegion : "All Regions";
+  const views = Object.fromEntries(
+    Object.entries(models).map(([region, model]) => [region, buildDashboardView(model)]),
+  );
+  const initialView = views[initialRegion];
+  const serializedViews = JSON.stringify(views)
     .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029");
-  const serializedRegion = JSON.stringify(selectedRegion).replace(/</g, "\\u003c");
+  const serializedRegion = JSON.stringify(initialRegion).replace(/</g, "\\u003c");
+  const regionOptions = Object.keys(models)
+    .map((region) => `<option value="${escapeHtml(region)}"${region === initialRegion ? " selected" : ""}>${escapeHtml(region)}</option>`)
+    .join("");
+  const regionEntries = Object.keys(models).map((region, index) => ({ region, index, view: views[region] }));
+  const fallbackInputs = regionEntries
+    .map(({ region, index }) => `<input class="dashboard-region-toggle" type="radio" name="dashboard-region" id="dashboard-region-${index}"${region === initialRegion ? " checked" : ""}>`)
+    .join("");
+  const fallbackOptions = regionEntries
+    .map(({ region, index }) => `<label class="dashboard-region-option dashboard-region-option-${index}" for="dashboard-region-${index}">${escapeHtml(region)}</label>`)
+    .join("");
+  const fallbackViews = regionEntries
+    .map(({ region, index, view }) => `<div class="dashboard-fallback-view dashboard-fallback-view-${index}"><p class="dashboard-fallback-context">Region: ${escapeHtml(region)}</p>${buildDashboardSections(view)}</div>`)
+    .join("");
+  const fallbackRules = regionEntries
+    .map(({ index }) => `#dashboard-region-${index}:checked ~ .shell .dashboard-fallback-view-${index} { display: grid; } #dashboard-region-${index}:checked ~ .shell .dashboard-region-option-${index} { border-color: #fff; background: #fff; color: #16324f; }`)
+    .join("\n    ");
 
   return `<!doctype html>
 <html lang="en">
@@ -33,6 +63,18 @@ export function buildDashboardHtml(
     .filter { display: grid; gap: 5px; min-width: 210px; }
     .filter label { color: #cbd5e1; font-size: 11px; text-transform: uppercase; }
     select { min-height: 38px; padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; color: #172033; font: inherit; }
+    .dashboard-region-toggle { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+    .dashboard-script-filter, .dashboard-script-view { display: none; }
+    .dashboard-fallback-filter { min-width: 0; margin: 0; padding: 0; border: 0; }
+    .dashboard-fallback-filter legend { margin-bottom: 6px; padding: 0; color: #cbd5e1; font-size: 11px; text-transform: uppercase; }
+    .dashboard-region-options { display: flex; flex-wrap: wrap; gap: 8px; }
+    .dashboard-region-option { display: inline-flex; min-height: 40px; align-items: center; padding: 8px 12px; border: 1px solid #94a3b8; border-radius: 999px; color: #f8fafc; font-size: 13px; font-weight: 700; line-height: 1; text-transform: none; cursor: pointer; }
+    .dashboard-fallback-view { display: none; gap: 18px; }
+    .dashboard-fallback-context { margin: 0; color: #475569; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    .dashboard-js .dashboard-script-filter, .dashboard-js .dashboard-script-view { display: grid; }
+    .dashboard-js .dashboard-script-view { gap: 18px; }
+    .dashboard-js .dashboard-fallback-filter, .dashboard-js .dashboard-fallback-views { display: none; }
+    ${fallbackRules}
     .print-region { display: none; }
     .kpis { display: grid; gap: 10px; }
     .kpi-row { display: grid; gap: 10px; }
@@ -59,12 +101,14 @@ export function buildDashboardHtml(
     th { color: #64748b; font-size: 11px; text-transform: uppercase; }
     th:not(:first-child), td:not(:first-child) { text-align: right; }
     .empty { padding: 20px; color: #64748b; text-align: center; }
-    @media (max-width: 820px) { .hero, .panel-head { flex-direction: column; } .filter { width: 100%; } .kpi-row.population, .kpi-row.execution { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); } .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 820px) { .hero, .panel-head { flex-direction: column; } .filter { width: 100%; } select { width: 100%; min-height: 44px; } .dashboard-region-option { min-height: 44px; } .kpi-row.population, .kpi-row.execution { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); } .grid { grid-template-columns: 1fr; } .table-shell { -webkit-overflow-scrolling: touch; } }
+    @media (max-width: 520px) { .shell { width: calc(100% - 16px); gap: 12px; padding: 8px 0 20px; } .hero { gap: 18px; padding: 20px; border-radius: 12px; } .hero-copy { font-size: 14px; line-height: 1.45; } .kpi-row.population, .kpi-row.execution { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpi { min-height: 96px; padding: 12px; } .kpi span { font-size: 10px; } .kpi strong { font-size: 28px; } .panel { padding: 16px; } .panel-head { gap: 8px; } table { min-width: 680px; } th, td { padding: 9px 10px; } }
     @media print {
       @page { size: A4 portrait; margin: 6mm; }
       body { background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .shell { width: 100%; padding: 0; gap: 6px; }
-      .filter { display: none; } .print-region { display: block; color: #cbd5e1; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+      .dashboard-script-filter, .dashboard-fallback-filter { display: none !important; } .dashboard-js .print-region { display: block; } .print-region, .dashboard-fallback-context { color: #cbd5e1; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+      .dashboard-script-view, .dashboard-fallback-view { gap: 6px; }
       .hero { padding: 10px 12px; } h1 { font-size: 20px; } .hero-copy, .meta, .eyebrow { font-size: 9px; }
       .kpis, .kpi-row { gap: 5px; } .kpi-row.population { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kpi-row.execution { grid-template-columns: repeat(5, minmax(0, 1fr)); }
       .kpi { gap: 4px; min-height: 58px; padding: 7px 8px; box-shadow: none; } .kpi span { font-size: 8px; } .kpi strong { font-size: 21px; }
@@ -77,78 +121,44 @@ export function buildDashboardHtml(
   </style>
 </head>
 <body>
+  ${fallbackInputs}
   <main class="shell">
     <section class="hero">
       <div>
         <p class="eyebrow">Manager control tower</p>
         <h1>Commissioned population and setup execution</h1>
         <p class="hero-copy">Employees with Active Status = Yes in the current SCR, paired with the latest verification baseline.</p>
-        <p class="meta">Processing month: ${escapeHtml(processingMonth)} <span id="snapshot"></span></p>
+        <p class="meta">Processing month: ${escapeHtml(processingMonth)} <span id="snapshot">${escapeHtml(initialView.snapshot)}</span></p>
       </div>
-      <div class="filter"><label for="region-filter">Region</label><select id="region-filter"></select></div>
-      <span class="print-region" id="print-region"></span>
+      <div class="filter dashboard-script-filter"><label for="region-filter">Region</label><select id="region-filter">${regionOptions}</select></div>
+      <fieldset class="filter dashboard-fallback-filter"><legend>Region</legend><div class="dashboard-region-options">${fallbackOptions}</div></fieldset>
+      <span class="print-region" id="print-region">Region: ${escapeHtml(initialRegion)}</span>
     </section>
-    <section class="kpis" id="kpis"></section>
-    <section class="panel">
-      <div class="panel-head"><div><p class="eyebrow">Analyst view</p><h2>Analyst setup ownership</h2><p class="panel-copy">Missing assignments use the unique top Analyst for Country + SCR LOB, then Region + SCR LOB. Ties remain Unassigned.</p></div><span class="caption">Inferred assignments are estimates, not Xactly master data.</span></div>
-      <div id="analyst-table"></div>
-    </section>
-    <section class="grid"><section class="panel chart"><h2>Commissioned employees by Region</h2><div id="region-bars"></div></section><section class="panel chart"><h2>Commissioned employees by LOB</h2><div id="lob-bars"></div></section></section>
-    <section class="panel"><div class="panel-head"><div><p class="eyebrow">Execution</p><h2>Setup progress by LOB</h2></div></div><div id="lob-table"></div></section>
+    <div class="dashboard-script-view">${buildDashboardSections(initialView, true)}</div>
+    <div class="dashboard-fallback-views">${fallbackViews}</div>
   </main>
   <script>
-    const models = ${serializedModels};
-    const defaultRegion = ${serializedRegion};
-    const metricDescriptions = ${JSON.stringify(METRIC_DESCRIPTIONS)};
-    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\\\"": "&quot;", "'": "&#39;" })[character]);
-    const formatCount = (value) => Number(value || 0).toLocaleString();
-    const formatPercent = (value) => Math.round(Number(value || 0) * 100) + "%";
-    const regionFilter = document.getElementById("region-filter");
-    Object.keys(models).forEach((region) => regionFilter.add(new Option(region, region)));
-    regionFilter.value = models[defaultRegion] ? defaultRegion : "All Regions";
-
-    function renderTable(targetId, rows, firstColumn, showInferred) {
-      const target = document.getElementById(targetId);
-      if (!rows.length) { target.innerHTML = '<div class="empty">No data in this selection.</div>'; return; }
-      const inferredHeader = showInferred ? "<th>Inferred</th>" : "";
-      const body = rows.map((row) => "<tr><td>" + escapeHtml(row.label) + "</td><td>" + formatCount(row.employees) + "</td><td>" + formatCount(row.required) + "</td><td>" + formatCount(row.completed) + "</td><td>" + formatCount(row.pending) + "</td><td>" + formatCount(row.overdue) + "</td>" + (showInferred ? "<td>" + formatCount(row.inferred) + "</td>" : "") + "<td>" + (row.required > 0 ? Math.round(row.completed / row.required * 100) + "%" : "—") + "</td></tr>").join("");
-      target.innerHTML = '<div class="table-shell"><table><thead><tr><th>' + escapeHtml(firstColumn) + '</th><th>Employees</th><th>Required</th><th>Completed</th><th>Pending</th><th>Overdue</th>' + inferredHeader + '<th>Completion</th></tr></thead><tbody>' + body + '</tbody></table></div>';
-    }
-
-    function renderBars(targetId, rows) {
-      const target = document.getElementById(targetId);
-      if (!rows.length) { target.innerHTML = '<div class="empty">No commissioned employees in this selection.</div>'; return; }
-      const maximum = Math.max(1, ...rows.map((row) => row.employees));
-      target.className = "bar-list";
-      target.innerHTML = rows.map((row) => '<div class="bar-row"><div class="bar-label"><span>' + escapeHtml(row.label) + '</span><strong>' + formatCount(row.employees) + '</strong></div><div class="bar-track"><span style="width:' + Math.max(2, row.employees / maximum * 100) + '%"></span></div></div>').join("");
-    }
+    var views = ${serializedViews};
+    var defaultRegion = ${serializedRegion};
+    var regionFilter = document.getElementById("region-filter");
+    regionFilter.value = defaultRegion;
 
     function renderDashboard() {
-      const region = regionFilter.value;
-      const model = models[region];
+      var region = regionFilter.value;
+      var view = views[region] || views[defaultRegion];
       document.title = "Participant Setup Dashboard - " + region;
       document.getElementById("print-region").textContent = "Region: " + region;
-      document.getElementById("snapshot").textContent = model.latestPeopleDate ? " · People snapshot: " + model.latestPeopleDate : "";
-      const metrics = [
-        { label: "Commissioned Employees", value: model.commissionedEmployees, tone: "navy" },
-        { label: "Setup Required", value: model.setupRequired, tone: "ink" },
-        { label: "Setup Required (%)", value: model.setupRequiredRate, tone: "blue", percent: true },
-        { label: "Completed", value: model.completed, tone: "green" },
-        { label: "Partially Completed", value: model.partiallyCompleted, tone: "amber" },
-        { label: "Pending", value: model.pending, tone: "coral" },
-        { label: "Manager Mismatch Only", value: model.managerMismatchOnly, tone: "amber" },
-        { label: "Completion Rate", value: model.completionRate, tone: "blue", percent: true }
-      ];
-      const cards = metrics.map((metric) => '<article class="kpi tone-' + metric.tone + '" title="' + escapeHtml(metricDescriptions[metric.label]) + '"><span>' + escapeHtml(metric.label) + '</span><strong>' + (metric.percent ? formatPercent(metric.value) : formatCount(metric.value)) + '</strong></article>');
-      document.getElementById("kpis").innerHTML = '<div class="kpi-row population">' + cards.slice(0, 3).join("") + '</div><div class="kpi-row execution">' + cards.slice(3).join("") + '</div>';
-      renderTable("analyst-table", model.byAnalyst, "Analyst", true);
-      renderBars("region-bars", model.byRegion);
-      renderBars("lob-bars", model.byLob);
-      renderTable("lob-table", model.byLob, "LOB", false);
+      document.getElementById("snapshot").textContent = view.snapshot;
+      document.getElementById("kpis").innerHTML = view.kpis;
+      document.getElementById("analyst-table").innerHTML = view.analystTable;
+      document.getElementById("region-bars").innerHTML = view.regionBars;
+      document.getElementById("lob-bars").innerHTML = view.lobBars;
+      document.getElementById("lob-table").innerHTML = view.lobTable;
     }
 
     regionFilter.addEventListener("change", renderDashboard);
     renderDashboard();
+    document.documentElement.className += " dashboard-js";
   </script>
 </body>
 </html>`;
@@ -177,6 +187,78 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
   "Manager Mismatch Only": "The only outstanding change is the Level 1 Manager; excluded from Setup Required and Completion Rate.",
   "Completion Rate": "Completed divided by Completed, Partially Completed, and Pending setup actions.",
 };
+
+function buildDashboardSections(view: DashboardHtmlView, includeIds = false): string {
+  const id = (value: string) => includeIds ? ` id="${value}"` : "";
+  return `<section class="kpis"${id("kpis")}>${view.kpis}</section>
+    <section class="panel">
+      <div class="panel-head"><div><p class="eyebrow">Analyst view</p><h2>Analyst setup ownership</h2><p class="panel-copy">Missing assignments use the unique top Analyst for Country + SCR LOB, then Region + SCR LOB. Ties remain Unassigned.</p></div><span class="caption">Inferred assignments are estimates, not Xactly master data.</span></div>
+      <div${id("analyst-table")}>${view.analystTable}</div>
+    </section>
+    <section class="grid"><section class="panel chart"><h2>Commissioned employees by Region</h2><div class="bar-list"${id("region-bars")}>${view.regionBars}</div></section><section class="panel chart"><h2>Commissioned employees by LOB</h2><div class="bar-list"${id("lob-bars")}>${view.lobBars}</div></section></section>
+    <section class="panel"><div class="panel-head"><div><p class="eyebrow">Execution</p><h2>Setup progress by LOB</h2></div></div><div${id("lob-table")}>${view.lobTable}</div></section>`;
+}
+
+function buildDashboardView(model: DashboardModel): DashboardHtmlView {
+  return {
+    snapshot: model.latestPeopleDate ? ` · People snapshot: ${model.latestPeopleDate}` : "",
+    kpis: buildKpis(model),
+    analystTable: buildTable(model.byAnalyst, "Analyst", true),
+    regionBars: buildBars(model.byRegion),
+    lobBars: buildBars(model.byLob),
+    lobTable: buildTable(model.byLob, "LOB", false),
+  };
+}
+
+function buildKpis(model: DashboardModel): string {
+  const metrics = [
+    { label: "Commissioned Employees", value: model.commissionedEmployees, tone: "navy" },
+    { label: "Setup Required", value: model.setupRequired, tone: "ink" },
+    { label: "Setup Required (%)", value: model.setupRequiredRate, tone: "blue", percent: true },
+    { label: "Completed", value: model.completed, tone: "green" },
+    { label: "Partially Completed", value: model.partiallyCompleted, tone: "amber" },
+    { label: "Pending", value: model.pending, tone: "coral" },
+    { label: "Manager Mismatch Only", value: model.managerMismatchOnly, tone: "amber" },
+    { label: "Completion Rate", value: model.completionRate, tone: "blue", percent: true },
+  ];
+  const cards = metrics.map(
+    (metric) => `<article class="kpi tone-${metric.tone}" title="${escapeHtml(METRIC_DESCRIPTIONS[metric.label])}"><span>${escapeHtml(metric.label)}</span><strong>${metric.percent ? formatPercent(metric.value) : formatCount(metric.value)}</strong></article>`,
+  );
+  return `<div class="kpi-row population">${cards.slice(0, 3).join("")}</div><div class="kpi-row execution">${cards.slice(3).join("")}</div>`;
+}
+
+function buildTable(
+  rows: DashboardModel["byLob"],
+  firstColumn: string,
+  showInferred: boolean,
+): string {
+  if (!rows.length) return '<div class="empty">No data in this selection.</div>';
+  const inferredHeader = showInferred ? "<th>Inferred</th>" : "";
+  const body = rows
+    .map(
+      (row) => `<tr><td>${escapeHtml(row.label)}</td><td>${formatCount(row.employees)}</td><td>${formatCount(row.required)}</td><td>${formatCount(row.completed)}</td><td>${formatCount(row.pending)}</td><td>${formatCount(row.overdue)}</td>${showInferred ? `<td>${formatCount(row.inferred)}</td>` : ""}<td>${row.required > 0 ? `${Math.round((row.completed / row.required) * 100)}%` : "—"}</td></tr>`,
+    )
+    .join("");
+  return `<div class="table-shell"><table><thead><tr><th>${escapeHtml(firstColumn)}</th><th>Employees</th><th>Required</th><th>Completed</th><th>Pending</th><th>Overdue</th>${inferredHeader}<th>Completion</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function buildBars(rows: DashboardModel["byLob"]): string {
+  if (!rows.length) return '<div class="empty">No commissioned employees in this selection.</div>';
+  const maximum = Math.max(1, ...rows.map((row) => row.employees));
+  return rows
+    .map(
+      (row) => `<div class="bar-row"><div class="bar-label"><span>${escapeHtml(row.label)}</span><strong>${formatCount(row.employees)}</strong></div><div class="bar-track"><span style="width:${Math.max(2, (row.employees / maximum) * 100)}%"></span></div></div>`,
+    )
+    .join("");
+}
+
+function formatCount(value: number): string {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(Number(value || 0) * 100)}%`;
+}
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({

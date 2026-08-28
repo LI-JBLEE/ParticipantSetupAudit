@@ -273,6 +273,21 @@ const dashboardScript = dashboardHtml.slice(
   dashboardHtml.indexOf("<script>") + "<script>".length,
   dashboardHtml.lastIndexOf("</script>"),
 );
+const dashboardStaticHtml = dashboardHtml.slice(0, dashboardHtml.indexOf("<script>"));
+if (
+  !dashboardStaticHtml.includes('<option value="APAC" selected>APAC</option>') ||
+  !dashboardStaticHtml.includes(">7</strong>") ||
+  !dashboardStaticHtml.includes("Analyst setup ownership") ||
+  !dashboardStaticHtml.includes('id="dashboard-region-0"') ||
+  !dashboardStaticHtml.includes('for="dashboard-region-1"') ||
+  !dashboardStaticHtml.includes("#dashboard-region-1:checked ~ .shell .dashboard-fallback-view-1") ||
+  !dashboardStaticHtml.includes(">1</strong>")
+) {
+  throw new Error("Dashboard HTML did not include usable CSS-only Region fallback views.");
+}
+if (/(?:=>|\?\?|\bconst\b|\blet\b|\.\.\.)/.test(dashboardScript)) {
+  throw new Error("Dashboard HTML runtime includes JavaScript syntax that can fail in older mobile WebViews.");
+}
 const fakeElements = new Map(
   ["region-filter", "kpis", "snapshot", "print-region", "analyst-table", "region-bars", "lob-bars", "lob-table"].map(
     (id) => [
@@ -294,27 +309,25 @@ const fakeElements = new Map(
     ],
   ),
 );
+fakeElements.get("region-filter")?.options.push(
+  { text: "All Regions", value: "All Regions" },
+  { text: "APAC", value: "APAC" },
+);
 const fakeDocument = {
   title: "",
+  documentElement: { className: "" },
   getElementById: (id: string) => fakeElements.get(id),
 };
-class FakeOption {
-  text: string;
-  value: string;
-
-  constructor(text: string, value: string) {
-    this.text = text;
-    this.value = value;
-  }
-}
 Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
-Object.defineProperty(globalThis, "Option", { configurable: true, value: FakeOption });
 try {
   new Function(dashboardScript)();
   const regionFilter = fakeElements.get("region-filter");
   const kpis = fakeElements.get("kpis");
   if (regionFilter?.options.length !== 2 || regionFilter.value !== "APAC" || !kpis?.innerHTML.includes(">7</strong>")) {
     throw new Error("Dashboard HTML did not render the default Region model.");
+  }
+  if (!fakeDocument.documentElement.className.includes("dashboard-js")) {
+    throw new Error("Dashboard HTML did not switch from the CSS fallback to the scripted Region filter.");
   }
   regionFilter.value = "All Regions";
   regionFilter.listeners.change?.();
@@ -323,7 +336,6 @@ try {
   }
 } finally {
   Reflect.deleteProperty(globalThis, "document");
-  Reflect.deleteProperty(globalThis, "Option");
 }
 if (
   !dashboardHtml.includes('id="region-filter"') ||
