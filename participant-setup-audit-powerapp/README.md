@@ -63,6 +63,8 @@ The exact changed fields remain in `changeSummary`.
 
 For an existing participant, a Job Title, Job Level, or Job Grade change is classified as a career movement. It is a `Promotion` when the normalized Job Grade rises in this order: `04 < 05 < 06 < 07 < 08.1 < 08.2 < 09.1 < 09.2 < 09.3 < 10 < 11 < 12 < A`. A same-grade change from an `IC` level to an `MR` level is also a Promotion. Other career movements, including same-grade IC/SP changes, lower grades, and unknown grades, are classified as `Job Change`. The suffix records whether Commission Amount also changed.
 
+Existing participants with a Country or Business Unit change also include three recommendation fields: `inferredAnalystName`, `analystReview`, and `inferenceBasis`. The current People `analystName` remains authoritative. A recommendation is calculated from the current Country + derived LOB, then Region + derived LOB, only when the routing key changed. Business Unit changes that stay within the same Country and derived LOB are marked `No Routing Change`. Recommended Analyst cells are highlighted light yellow.
+
 ## Follow-up verification
 
 1. Generate and download the initial audit workbook.
@@ -70,7 +72,7 @@ For an existing participant, a Job Title, Job Level, or Job Grade change is clas
 3. Upload the initial audit workbook and the latest People file.
 4. Generate the verification report and review `Completed`, `Partially Completed`, `Pending`, `Manager Mismatch Only`, and SLA status.
 
-The verification workbook includes `Verification Report`, `Column Guide`, `Field Details`, and `Summary`. `auditSubcategory` is carried from the initial audit through the Verification Baseline and into the Verification Report. Older audit workbooks without this column derive it from their verification field set.
+The verification workbook includes `Verification Report`, `Column Guide`, `Field Details`, and `Summary`. `auditSubcategory` and existing-participant Analyst recommendations are carried from the initial audit through the Verification Baseline and into the Verification Report. Older audit workbooks without these recommendation columns continue with blank recommendation values.
 
 Job Level, Job Grade, Business Unit, Position, and OKR changes remain `Not Verifiable` when the People-only follow-up does not contain an approved direct mapping.
 
@@ -86,7 +88,7 @@ When a setup target has no People `Analyst_Name`, the dashboard infers ownership
 2. Otherwise, unique top Analyst for Region + derived LOB
 3. Ties remain `Unassigned`
 
-New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst. Inferred assignments are labeled with source, confidence, and sample size; they do not overwrite People data.
+New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst. Existing-participant recommendations remain separate from actual ownership, so Dashboard Analyst counts continue to use the current People Analyst. Inferred assignments are labeled with source, confidence, and sample size; they do not overwrite People data.
 
 ## Deployment checkpoint
 

@@ -149,6 +149,9 @@ export interface AuditRow {
   peoplePlanEffectiveDate: string;
   peopleBusinessUnit: string;
   analystName: string;
+  inferredAnalystName: string;
+  analystReview: string;
+  inferenceBasis: string;
   planType: string;
   hireDate: string;
   terminationDate: string;
@@ -199,6 +202,9 @@ export interface VerificationExpectation {
   lob: string;
   country: string;
   analystName: string;
+  inferredAnalystName: string;
+  analystReview: string;
+  inferenceBasis: string;
   analystSource: string;
   analystConfidence: string;
   analystSampleSize: number;
@@ -237,6 +243,9 @@ export interface VerificationResultRow {
   lob: string;
   country: string;
   analystName: string;
+  inferredAnalystName: string;
+  analystReview: string;
+  inferenceBasis: string;
   analystSource: string;
   analystConfidence: string;
   analystSampleSize: number;

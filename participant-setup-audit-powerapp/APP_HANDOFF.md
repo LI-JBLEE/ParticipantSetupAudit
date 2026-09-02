@@ -441,6 +441,18 @@ Sheets:
 - Audit Results also displays Previous and Current Job Level (Grade). Job Level and Job Grade expectations are carried into Verification as `Not Verifiable` because the People-only follow-up does not contain those SCR fields.
 - `Manager Change Only` continues to use the separate `Manager Mismatch Only` verification treatment and remains outside Setup Required and Completion Rate.
 
+### Existing-participant Analyst recommendation
+
+- Country or Business Unit changes are reviewed for an Analyst routing-key change.
+- The routing key is current SCR Country + derived LOB; Region + derived LOB remains the fallback.
+- `analystName` remains the current People/Xactly owner.
+- `inferredAnalystName`, `analystReview`, and `inferenceBasis` show the app recommendation separately.
+- `analystReview` is `Change Suggested`, `No Change Suggested`, `Ambiguous / Unassigned`, or `No Routing Change`.
+- A Business Unit change within the same Country and derived LOB is `No Routing Change` and does not produce a suggested Analyst.
+- Employees whose routing key changed are excluded from the peer index so their old People Analyst does not influence the new assignment recommendation.
+- The recommendation is carried through Verification Baseline and Verification Report, while Dashboard Analyst counts continue to use actual People ownership.
+- Nonblank `inferredAnalystName` cells are highlighted light yellow in Audit and Verification Excel files.
+
 ## 14. Known sample-data observations
 
 The current sample data includes at least two `Change to Existing Participant` rows without People records:

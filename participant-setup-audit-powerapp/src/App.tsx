@@ -51,6 +51,9 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "peoplePlanEffectiveDate", label: "People Plan Effective Date" },
   { key: "peopleBusinessUnit", label: "People Business Unit" },
   { key: "analystName", label: "Analyst Name" },
+  { key: "inferredAnalystName", label: "Inferred Analyst Name" },
+  { key: "analystReview", label: "Analyst Review" },
+  { key: "inferenceBasis", label: "Inference Basis" },
   { key: "planType", label: "Plan Type" },
   { key: "hireDate", label: "Hire Date" },
   { key: "terminationDate", label: "Termination Date" },
@@ -92,6 +95,9 @@ const VERIFICATION_COLUMNS: Array<{ key: keyof VerificationResultRow; label: str
   { key: "region", label: "Region" },
   { key: "lob", label: "LOB" },
   { key: "analystName", label: "Analyst" },
+  { key: "inferredAnalystName", label: "Inferred Analyst" },
+  { key: "analystReview", label: "Analyst Review" },
+  { key: "inferenceBasis", label: "Inference Basis" },
   { key: "analystSource", label: "Analyst Source" },
   { key: "analystConfidence", label: "Confidence" },
   { key: "dueDate", label: "Due Date" },
@@ -754,6 +760,8 @@ function App() {
                 <li>Missing Analyst assignments use Country + LOB, then Region + LOB; ties remain Unassigned.</li>
                 <li>New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst.</li>
                 <li>In Audit Excel, a light yellow Analyst Name cell marks an inferred assignment.</li>
+                <li>For existing participants, a Country or derived LOB change shows the current Analyst beside the inferred Analyst recommendation.</li>
+                <li>Business Unit changes that remain within the same Country and derived LOB are marked No Routing Change.</li>
                 <li>Any Audit Subcategory containing Variable Change requires the Annual Variable update to be verified.</li>
                 <li>A higher Job Grade, or a same-grade IC-to-MR move, is classified as Promotion; other career movements are Job Change.</li>
                 <li>Job Level and Job Grade are not available in the People-only follow-up and therefore remain Not Verifiable.</li>

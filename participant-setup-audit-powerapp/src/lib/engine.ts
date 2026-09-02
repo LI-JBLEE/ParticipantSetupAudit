@@ -53,6 +53,9 @@ const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   peoplePlanEffectiveDate: "Current plan effective date in the People record.",
   peopleBusinessUnit: "Current Business_Unit value in the People record.",
   analystName: "Analyst assigned or inferred to own the setup action. Light yellow cells indicate an inferred assignment.",
+  inferredAnalystName: "Analyst suggested from the employee's current Country and derived LOB. Light yellow indicates an app inference.",
+  analystReview: "Review outcome comparing the current People Analyst with the inferred Analyst.",
+  inferenceBasis: "Inference level, confidence, and supporting employee count, or the reason no routing recommendation was made.",
   planType: "Current plan type in the People record.",
   hireDate: "Hire date relevant to a new-hire or rehire audit item.",
   terminationDate: "Termination date relevant to a termination audit item.",
@@ -93,6 +96,9 @@ const VERIFICATION_COLUMN_DESCRIPTIONS: Record<keyof VerificationResultRow, stri
   lob: "Employee line of business recorded in the initial audit baseline.",
   country: "Employee country recorded in the initial audit baseline.",
   analystName: "Analyst assigned or inferred to own the setup action.",
+  inferredAnalystName: "Analyst suggested during the initial audit for an existing participant whose routing key changed.",
+  analystReview: "Initial audit comparison between the current and inferred Analyst.",
+  inferenceBasis: "Inference level, confidence, and supporting employee count carried from the initial audit.",
   analystSource: "Source of the analyst assignment, such as People or an inferred mapping.",
   analystConfidence: "Confidence percentage for an inferred analyst assignment.",
   analystSampleSize: "Number of existing employees supporting the inferred analyst assignment.",
@@ -557,8 +563,28 @@ export function buildAuditReport(
       )
       .map((current) => current.employeeId),
   );
+  const sharedActiveIds = intersectKeys(data.currentScrById, data.previousScrById).filter((employeeId) => {
+    const current = data.currentScrById[employeeId];
+    const previous = data.previousScrById[employeeId];
+    return Boolean(current) && Boolean(previous) && isYes(current.activeStatus) && isYes(previous.activeStatus);
+  });
+  const analystRecommendationIds = new Set(
+    sharedActiveIds.filter((employeeId) => {
+      const current = data.currentScrById[employeeId];
+      const previous = data.previousScrById[employeeId];
+      if (!current || !previous) return false;
+      const routingFieldChanged =
+        compareField("Business Unit", previous.businessUnit, current.businessUnit).changed ||
+        compareField("Country", previous.country, current.country).changed;
+      return routingFieldChanged && hasAnalystRoutingChange(previous, current, data.peopleById[employeeId]);
+    }),
+  );
   const inferredOwnershipIds = new Set([...newHireIds, ...transferToSalesIds]);
-  const analystInferenceIndex = buildAnalystInferenceIndex(data, countryToRegion, inferredOwnershipIds);
+  const analystInferenceIndex = buildAnalystInferenceIndex(
+    data,
+    countryToRegion,
+    new Set([...inferredOwnershipIds, ...analystRecommendationIds]),
+  );
 
   for (const current of Object.values(data.currentScrById)) {
     if (!isYes(current.activeStatus)) continue;
@@ -621,12 +647,6 @@ export function buildAuditReport(
     );
   }
 
-  const sharedActiveIds = intersectKeys(data.currentScrById, data.previousScrById).filter((employeeId) => {
-    const current = data.currentScrById[employeeId];
-    const previous = data.previousScrById[employeeId];
-    return Boolean(current) && Boolean(previous) && isYes(current.activeStatus) && isYes(previous.activeStatus);
-  });
-
   for (const employeeId of sharedActiveIds) {
     const current = data.currentScrById[employeeId];
     const previous = data.previousScrById[employeeId];
@@ -652,6 +672,15 @@ export function buildAuditReport(
     if (previousOnLeave !== currentOnLeave && !loa) warnings.push(`LOA detail not found for employee ${employeeId}.`);
 
     if (changes.length > 0) {
+      const analystRecommendation = deriveExistingAnalystRecommendation(
+        employeeId,
+        changes,
+        previous,
+        current,
+        data,
+        countryToRegion,
+        analystInferenceIndex,
+      );
       rows.push(
         createAuditRow(
           isLoaReturn
@@ -664,6 +693,7 @@ export function buildAuditReport(
           current.fullName || context.name,
           context,
           {
+            ...analystRecommendation,
             auditSubcategory: deriveExistingParticipantSubcategory(changes, previous, current),
             previousJobTitle: hasChanged(changes, "Job Title") ? previous.jobTitle : "",
             currentJobTitle: hasChanged(changes, "Job Title") ? current.jobTitle : "",
@@ -841,6 +871,7 @@ export function buildAuditWorkbook(
   applyHeaderStyle(reportSheet);
   if (reportRows.length > 0) {
     const analystColumn = Object.keys(reportRows[0]).indexOf("analystName");
+    const inferredAnalystColumn = Object.keys(reportRows[0]).indexOf("inferredAnalystName");
     const inferredVerificationIds = new Set(
       expectations
         .filter((expectation) => expectation.analystSource.startsWith("Inferred:"))
@@ -851,6 +882,13 @@ export function buildAuditWorkbook(
         const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
         if (!inferredVerificationIds.has(verificationId)) return;
         const cell = reportSheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: analystColumn })];
+        if (cell) cell.s = { ...(cell.s ?? {}), fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } } };
+      });
+    }
+    if (inferredAnalystColumn >= 0) {
+      reportRows.forEach((row, rowIndex) => {
+        if (!row.inferredAnalystName) return;
+        const cell = reportSheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: inferredAnalystColumn })];
         if (cell) cell.s = { ...(cell.s ?? {}), fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } } };
       });
     }
@@ -949,6 +987,9 @@ export async function parseVerificationBaselineFile(
       lob: text(row.lob),
       country: text(row.country),
       analystName: text(row.analystName),
+      inferredAnalystName: text(row.inferredAnalystName),
+      analystReview: text(row.analystReview),
+      inferenceBasis: text(row.inferenceBasis),
       analystSource: text(row.analystSource) || (text(row.analystName) ? "People" : "Unassigned"),
       analystConfidence: text(row.analystConfidence),
       analystSampleSize: toNumber(row.analystSampleSize) ?? 0,
@@ -1067,6 +1108,9 @@ export function buildFollowUpVerification(
       lob: first.lob,
       country: first.country,
       analystName: first.analystName,
+      inferredAnalystName: first.inferredAnalystName,
+      analystReview: first.analystReview,
+      inferenceBasis: first.inferenceBasis,
       analystSource: first.analystSource,
       analystConfidence: first.analystConfidence,
       analystSampleSize: first.analystSampleSize,
@@ -1109,6 +1153,16 @@ export function buildFollowUpWorkbook(
   const wb = XLSX.utils.book_new();
   const reportSheet = XLSX.utils.json_to_sheet(result.rows);
   applyHeaderStyle(reportSheet);
+  if (result.rows.length > 0) {
+    const inferredAnalystColumn = Object.keys(result.rows[0]).indexOf("inferredAnalystName");
+    if (inferredAnalystColumn >= 0) {
+      result.rows.forEach((row, rowIndex) => {
+        if (!row.inferredAnalystName) return;
+        const cell = reportSheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: inferredAnalystColumn })];
+        if (cell) cell.s = { ...(cell.s ?? {}), fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } } };
+      });
+    }
+  }
   reportSheet["!cols"] = buildColumnWidths(result.rows);
   XLSX.utils.book_append_sheet(wb, reportSheet, "Verification Report");
   appendColumnGuide(wb, VERIFICATION_COLUMN_DESCRIPTIONS);
@@ -1271,6 +1325,9 @@ function buildVerificationExpectations(
         lob: row.lob,
         country: row.country,
         analystName: analystAssignment.name,
+        inferredAnalystName: row.inferredAnalystName,
+        analystReview: row.analystReview,
+        inferenceBasis: row.inferenceBasis,
         analystSource: analystAssignment.source,
         analystConfidence: analystAssignment.confidence,
         analystSampleSize: analystAssignment.sampleSize,
@@ -1464,6 +1521,49 @@ interface AnalystAssignment {
 }
 
 type AnalystData = Pick<AppData, "peopleById" | "currentScrById" | "previousScrById">;
+
+function hasAnalystRoutingChange(previous: ScrRecord, current: ScrRecord, people: PeopleRecord | undefined): boolean {
+  return (
+    compareField("Country", previous.country, current.country).changed ||
+    normalizeText(deriveLob(previous, people)) !== normalizeText(deriveLob(current, people))
+  );
+}
+
+function deriveExistingAnalystRecommendation(
+  employeeId: string,
+  changes: { label: string; changed: boolean }[],
+  previous: ScrRecord,
+  current: ScrRecord,
+  data: AnalystData,
+  countryToRegion: Record<string, string>,
+  index: AnalystInferenceIndex,
+): Pick<AuditRow, "inferredAnalystName" | "analystReview" | "inferenceBasis"> | Record<string, never> {
+  const routingFieldChanged = hasChanged(changes, "Business Unit") || hasChanged(changes, "Country");
+  if (!routingFieldChanged) return {};
+  const people = data.peopleById[employeeId];
+  if (!hasAnalystRoutingChange(previous, current, people)) {
+    return {
+      inferredAnalystName: "",
+      analystReview: "No Routing Change",
+      inferenceBasis: "Country + derived LOB unchanged",
+    };
+  }
+
+  const inferred = resolveAnalystAssignment(employeeId, data, countryToRegion, index, true);
+  if (inferred.name === "Unassigned") {
+    return {
+      inferredAnalystName: "Unassigned",
+      analystReview: "Ambiguous / Unassigned",
+      inferenceBasis: "No unique Country + LOB or Region + LOB match",
+    };
+  }
+  return {
+    inferredAnalystName: inferred.name,
+    analystReview:
+      normalizeText(people?.analystName) === normalizeText(inferred.name) ? "No Change Suggested" : "Change Suggested",
+    inferenceBasis: `${inferred.source.replace(/^Inferred:\s*/, "")} | ${inferred.confidence} | n=${inferred.sampleSize}`,
+  };
+}
 
 function buildAnalystInferenceIndex(
   data: Pick<AnalystData, "peopleById" | "currentScrById">,
@@ -1710,6 +1810,9 @@ function createAuditRow(
     peoplePlanEffectiveDate: context.peoplePlanEffectiveDate,
     peopleBusinessUnit: context.peopleBusinessUnit,
     analystName: context.analystName,
+    inferredAnalystName: "",
+    analystReview: "",
+    inferenceBasis: "",
     planType: context.planType,
     hireDate: "",
     terminationDate: "",

@@ -62,6 +62,9 @@ const base = {
   lob: people.businessUnit,
   country: people.country,
   analystName: people.analystName,
+  inferredAnalystName: "",
+  analystReview: "",
+  inferenceBasis: "",
   analystSource: "People",
   analystConfidence: "Confirmed",
   analystSampleSize: 0,
@@ -563,6 +566,159 @@ if (inferredAnalystCell?.s?.patternType !== "solid" || inferredAnalystCell.s.fgC
 
 const filters = { regions: ["APAC"], lobs: ["LSS"], countries: ["Singapore"] };
 const countryToRegion = { singapore: "APAC" };
+
+const recommendationData = createEmptyAppData();
+const recommendationRecords = [
+  {
+    employeeId: "000120",
+    name: "Country Change Employee",
+    previousCountry: "Singapore",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Current Analyst",
+  },
+  {
+    employeeId: "000121",
+    name: "Same LOB Employee",
+    previousCountry: "Singapore",
+    currentCountry: "Singapore",
+    previousBusinessUnit: "Advertising Sales",
+    currentBusinessUnit: "Advertising Operations",
+    analystName: "LMS Analyst",
+  },
+  {
+    employeeId: "000122",
+    name: "No Match Employee",
+    previousCountry: "Singapore",
+    currentCountry: "Germany",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Current Analyst",
+  },
+  {
+    employeeId: "000123",
+    name: "Australia Peer One",
+    previousCountry: "Australia",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Australia Analyst",
+  },
+  {
+    employeeId: "000124",
+    name: "Australia Peer Two",
+    previousCountry: "Australia",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Australia Analyst",
+  },
+];
+for (const record of recommendationRecords) {
+  const previous = {
+    ...scr(record.employeeId, new Date(2020, 0, 1), record.name, record.previousCountry),
+    businessUnit: record.previousBusinessUnit,
+  };
+  recommendationData.previousScrById[record.employeeId] = previous;
+  recommendationData.currentScrById[record.employeeId] = {
+    ...previous,
+    country: record.currentCountry,
+    businessUnit: record.currentBusinessUnit,
+  };
+  recommendationData.peopleById[record.employeeId] = {
+    ...people,
+    employeeId: record.employeeId,
+    fullName: record.name,
+    country: record.previousCountry,
+    analystName: record.analystName,
+  };
+  recommendationData.positionById[record.employeeId] = {
+    employeeId: record.employeeId,
+    positionName: `${record.name} (${record.employeeId})`,
+    personName: `${record.name} (${record.employeeId})`,
+    title: "Account Executive",
+    businessGroup: "Sales",
+    effectiveStartDate: new Date(2020, 0, 1),
+  };
+}
+const recommendationRegionMap = { australia: "APAC", germany: "EMEA", singapore: "APAC" };
+const recommendationAudit = buildAuditReport(
+  "JUL-2026",
+  { regions: ["APAC", "EMEA"], lobs: ["LMS", "LSS"], countries: ["Australia", "Germany", "Singapore"] },
+  recommendationData,
+  recommendationRegionMap,
+  new Date(2026, 6, 16),
+);
+const countryChangeRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000120");
+if (
+  countryChangeRecommendation?.analystName !== "Current Analyst" ||
+  countryChangeRecommendation.inferredAnalystName !== "Australia Analyst" ||
+  countryChangeRecommendation.analystReview !== "Change Suggested" ||
+  countryChangeRecommendation.inferenceBasis !== "Country + LOB | 100% | n=2"
+) {
+  throw new Error("Country change did not preserve the current Analyst and produce the expected Analyst recommendation.");
+}
+const sameLobRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000121");
+if (
+  sameLobRecommendation?.inferredAnalystName !== "" ||
+  sameLobRecommendation.analystReview !== "No Routing Change" ||
+  sameLobRecommendation.inferenceBasis !== "Country + derived LOB unchanged"
+) {
+  throw new Error("A Business Unit change within the same derived LOB was not marked No Routing Change.");
+}
+const noMatchRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000122");
+if (
+  noMatchRecommendation?.inferredAnalystName !== "Unassigned" ||
+  noMatchRecommendation.analystReview !== "Ambiguous / Unassigned"
+) {
+  throw new Error("An Analyst recommendation without a unique peer match was not marked Ambiguous / Unassigned.");
+}
+const recommendationVerification = buildFollowUpVerification(
+  recommendationAudit.expectations,
+  recommendationData.peopleById,
+  new Date(2026, 6, 22),
+);
+const countryChangeVerification = recommendationVerification.rows.find((row) => row.employeeId === "000120");
+if (
+  countryChangeVerification?.inferredAnalystName !== "Australia Analyst" ||
+  countryChangeVerification.analystReview !== "Change Suggested" ||
+  countryChangeVerification.inferenceBasis !== "Country + LOB | 100% | n=2"
+) {
+  throw new Error("Verification did not retain the initial Analyst recommendation.");
+}
+const recommendationWorkbook = XLSX.read(
+  buildAuditWorkbook(
+    recommendationAudit.rows,
+    {},
+    recommendationAudit.expectations,
+    recommendationData.currentScrById,
+  ),
+  { type: "array", cellStyles: true },
+);
+const recommendationSheet = recommendationWorkbook.Sheets["Audit Report"];
+const recommendationRows = XLSX.utils.sheet_to_json<string[]>(recommendationSheet, { header: 1, defval: "" });
+const recommendationHeaders = recommendationRows[0] ?? [];
+const recommendationRowIndex = recommendationRows.findIndex(
+  (row) => String(row[recommendationHeaders.indexOf("employeeId")]) === "000120",
+);
+const recommendationCell = recommendationSheet[
+  XLSX.utils.encode_cell({ r: recommendationRowIndex, c: recommendationHeaders.indexOf("inferredAnalystName") })
+] as { s?: { patternType?: string; fgColor?: { rgb?: string } } } | undefined;
+if (recommendationCell?.s?.patternType !== "solid" || recommendationCell.s.fgColor?.rgb !== "FFF2CC") {
+  throw new Error("Inferred Analyst Name cells are not highlighted light yellow in Audit Excel.");
+}
+const recommendationDashboard = buildDashboardModel(
+  recommendationData.currentScrById,
+  recommendationData.peopleById,
+  recommendationVerification.rows,
+  recommendationRegionMap,
+  "APAC",
+);
+if (recommendationDashboard.byAnalyst.find((row) => row.label === "Australia Analyst")?.employees !== 2) {
+  throw new Error("Existing-participant recommendations incorrectly replaced actual Dashboard Analyst ownership.");
+}
+
 const transferOutEmployeeId = "000087";
 const terminatedEmployeeId = "000088";
 const statusData = createEmptyAppData();
