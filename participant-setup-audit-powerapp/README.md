@@ -30,6 +30,7 @@ npm run build
 6. Sales Compensation Report (Current Month)
 7. Sales Compensation Report (Previous Month)
 8. Transfer to MSFT
+9. Worker Change Report (XLSX, XLS, or CSV)
 
 ## Output
 
@@ -41,7 +42,9 @@ npm run build
    - `Verification Baseline` sheet
    - `SCR Population` sheet
 
-`Audit Report` includes `auditSubcategory` immediately after `auditItem`, plus `previousJobLevelGrade` and `currentJobLevelGrade`. The two SCR values are displayed as `Level (Grade)`, for example `MR2 (09.1)`.
+`Audit Report` includes `auditSubcategory` immediately after `auditItem`, `WCR Effective Date`, plus `previousJobLevelGrade` and `currentJobLevelGrade`. The two SCR values are displayed as `Level (Grade)`, for example `MR2 (09.1)`.
+
+Worker Change Report rows are grouped by employee and Effective Date. Dates relevant to the detected Audit change are shown once; multiple distinct matching dates are separated by semicolons. A missing or ambiguous employee-level match remains blank.
 
 Participant changes use controlled operational subcategories:
 
@@ -94,4 +97,4 @@ New Hire and Transfer to Sales use inferred ownership instead of the employee's 
 
 - Power Apps app ID: `c57dffff-3ceb-4d92-893b-d91f2b67de6c`
 - Current Power Apps deployment: Git commit `1b92e4a`, deployed on 2026-08-26
-- The deployment includes Audit Subcategory propagation, inferred analyst ownership, and CSV Quota Assignment support, and intentionally excludes the proposed SharePoint source-file archive feature.
+- The current code includes Audit Subcategory propagation, inferred analyst ownership, WCR Effective Date matching, required WCR upload, and CSV Quota Assignment support. The proposed SharePoint source-file archive feature remains excluded.

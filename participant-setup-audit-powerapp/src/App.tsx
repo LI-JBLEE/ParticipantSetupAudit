@@ -11,7 +11,7 @@ import {
   buildFollowUpWorkbook,
   buildProcessingMonthOptions,
   createEmptyAppData,
-  getRequiredUploads,
+  getUploadDefinitions,
   loadCountryRegionReferenceMap,
   parseBalanceFile,
   parseLoaFile,
@@ -21,6 +21,7 @@ import {
   parseQuotaAssignmentFile,
   parseScrFile,
   parseVerificationBaselineFile,
+  parseWorkerChangeReportFile,
   summarizeSetupExecution,
 } from "./lib/engine";
 import type {
@@ -48,6 +49,7 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "currentOnLeave", label: "On Leave" },
   { key: "currentFirstDayOfLeave", label: "First Day of Leave" },
   { key: "changeSummary", label: "Change Summary" },
+  { key: "wcrEffectiveDate", label: "WCR Effective Date" },
   { key: "peoplePlanEffectiveDate", label: "People Plan Effective Date" },
   { key: "peopleBusinessUnit", label: "People Business Unit" },
   { key: "analystName", label: "Analyst Name" },
@@ -92,6 +94,7 @@ const VERIFICATION_COLUMNS: Array<{ key: keyof VerificationResultRow; label: str
   { key: "employeeName", label: "Employee Name" },
   { key: "auditItem", label: "Audit Item" },
   { key: "auditSubcategory", label: "Audit Subcategory" },
+  { key: "wcrEffectiveDate", label: "WCR Effective Date" },
   { key: "region", label: "Region" },
   { key: "lob", label: "LOB" },
   { key: "analystName", label: "Analyst" },
@@ -176,7 +179,7 @@ function App() {
     });
   }, [filterOptions, filtersTouched]);
 
-  const uploadDefinitions = useMemo(() => getRequiredUploads(), []);
+  const uploadDefinitions = useMemo(() => getUploadDefinitions(), []);
   const isReadyToGenerate =
     uploadDefinitions.every((item) => Boolean(uploadStatuses[item.key])) &&
     Boolean(processingMonth) &&
@@ -256,6 +259,10 @@ function App() {
         const result = await parseMsftTransferFile(file);
         setData((prev) => ({ ...prev, msftTransferById: result.data }));
         setUploadStatus(uploadKey, result.fileName, result.rows, "Transfer rows with employee IDs");
+      } else if (uploadKey === "workerChangeReport") {
+        const result = await parseWorkerChangeReportFile(file);
+        setData((prev) => ({ ...prev, workerChangesById: result.data }));
+        setUploadStatus(uploadKey, result.fileName, result.rows, "WCR effective-date reference records");
       }
     } catch (error) {
       setErrors([toError(error)]);
@@ -555,7 +562,7 @@ function App() {
               <div className={isBusy ? "busy-pill is-busy" : "busy-pill"}>{isBusy ? "Parsing..." : "Ready"}</div>
             </div>
 
-            <div className="upload-grid">
+            <div className="upload-grid initial-upload-grid">
               {uploadDefinitions.map((definition) => (
                 <UploadCard
                   key={definition.key}
@@ -694,11 +701,12 @@ function App() {
               <h3>Initial Audit</h3>
               <ol>
                 <li>Select the Processing Month.</li>
-                <li>Upload all eight required source files shown in the workspace.</li>
+                <li>Upload all nine required source files, including the Worker Change Report in XLSX, XLS, or CSV format.</li>
                 <li>Adjust Region, LOB, or Country filters if Select All is not required.</li>
                 <li>Click Generate Report, review warnings, and validate the Audit Results.</li>
                 <li>Use Audit Subcategory to distinguish single-field changes, Promotions, Job Changes, and whether Variable Compensation also changed.</li>
                 <li>Compare Previous and Current Job Level (Grade) values from the two SCR files when reviewing career movements.</li>
+                <li>When multiple WCR rows describe the same event date, the date is shown once; distinct matching dates are separated by semicolons.</li>
                 <li>Download the Excel file for analyst action and later verification.</li>
               </ol>
               <p className="instruction-note">
@@ -765,6 +773,7 @@ function App() {
                 <li>Any Audit Subcategory containing Variable Change requires the Annual Variable update to be verified.</li>
                 <li>A higher Job Grade, or a same-grade IC-to-MR move, is classified as Promotion; other career movements are Job Change.</li>
                 <li>Job Level and Job Grade are not available in the People-only follow-up and therefore remain Not Verifiable.</li>
+                <li>WCR Effective Date is supporting context; a missing or ambiguous employee-level match remains blank after a valid WCR is uploaded.</li>
               </ul>
             </article>
 

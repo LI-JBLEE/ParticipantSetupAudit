@@ -89,14 +89,17 @@ The required files are:
 2. `Sales Compensation Report (Previous Month)`
 3. `People`
 4. `Position`
-5. `Quota Assignment`
-6. `Payment Balance`
-7. `LOA Report`
-8. `Transfer to MSFT`
+5. `Worker Change Report`
+6. `Quota Assignment`
+7. `Payment Balance`
+8. `LOA Report`
+9. `Transfer to MSFT`
 
 Notes:
 
-- `Worker Change Report` is intentionally excluded from this app.
+- `Worker Change Report` accepts XLSX, XLS, or CSV and is required. Generate Report remains disabled until all nine source files parse successfully.
+- Matching WCR rows are grouped by employee and Effective Date. Dates relevant to the detected Audit change are shown once in `WCR Effective Date`; multiple distinct matching dates are separated by semicolons.
+- Missing or ambiguous WCR matches remain blank because WCR is supporting context rather than a required source.
 - `People` and `Position` are expected to be normal Excel files. Earlier encrypted versions were replaced with re-saved standard Excel files.
 
 ## 7. Employee ID rules

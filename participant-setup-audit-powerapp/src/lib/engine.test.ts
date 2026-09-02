@@ -11,6 +11,7 @@ import {
   parseQuotaAssignmentFile,
   parseScrFile,
   parseVerificationBaselineFile,
+  parseWorkerChangeReportFile,
   summarizeSetupExecution,
 } from "./engine";
 import type { PeopleRecord, ScrRecord, VerificationExpectation } from "./types";
@@ -70,6 +71,7 @@ const base = {
   analystSampleSize: 0,
   auditItem: "Change to Existing Participant",
   auditSubcategory: "",
+  wcrEffectiveDate: "",
   baselineValue: "",
   deferred: "No",
   note: "",
@@ -193,6 +195,90 @@ if (
   parsedScr.data["000100"]?.jobGrade !== "09.1"
 ) {
   throw new Error("SCR parser did not select the exact Job Family, Cost Center, Job Level, and Job Grade columns.");
+}
+
+const workerChangeMatrix = [
+  ["LI GSC Worker Change Report"],
+  ["Start Date", "2026-07-16"],
+  ["End Date", "2026-08-15"],
+  [
+    "Employee ID",
+    "Legal Name",
+    "Effective Date",
+    "Business Process Type",
+    "Business Process Reason",
+    "Job Profile - Current",
+    "Job Profile - Proposed",
+    "Manager - Current",
+    "Manager - Proposed",
+    "Cost Center - Current",
+    "Cost Center - Proposed",
+    "Companies - Current",
+    "Company - Proposed",
+    "Location - Current",
+    "Location - Proposed",
+    "Base Pay - Current",
+    "Currency",
+    "Base Pay - Proposed",
+    "Currency",
+    "Commission Amount - Current",
+    "Currency",
+    "Commission Amount - Proposed",
+    "Currency",
+  ],
+  [
+    "000111",
+    "Changed Employee",
+    "2026-07-10",
+    "Change Job",
+    "Promotion",
+    "Account Executive",
+    "Senior Account Executive",
+    "Current Manager",
+    "Current Manager",
+    "Sales",
+    "Sales",
+    "LinkedIn Singapore",
+    "LinkedIn Singapore",
+    "SG-Singapore",
+    "SG-Singapore",
+    100,
+    "SGD",
+    125,
+    "SGD",
+    50,
+    "SGD",
+    75,
+    "SGD",
+  ],
+  ["000111", "Changed Employee", "2026-07-10", "Change Organization Assignments for Worker"],
+  [
+    "000111",
+    "Changed Employee",
+    "2026-07-12",
+    "Change Organization Assignments for Worker",
+    "",
+    "",
+    "",
+    "Current Manager",
+    "Different Manager",
+  ],
+];
+const workerChangeCsv = workerChangeMatrix.map((row) => row.join(",")).join("\n");
+const workerChangeWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(workerChangeWorkbook, XLSX.utils.aoa_to_sheet(workerChangeMatrix), "Worker Change Report");
+const [parsedWorkerChangeCsv, parsedWorkerChangeXlsx] = await Promise.all([
+  parseWorkerChangeReportFile(new File([workerChangeCsv], "worker-change.csv", { type: "text/csv" })),
+  parseWorkerChangeReportFile(
+    new File([XLSX.write(workerChangeWorkbook, { type: "array", bookType: "xlsx" })], "worker-change.xlsx"),
+  ),
+]);
+if (
+  parsedWorkerChangeCsv.rows !== 3 ||
+  parsedWorkerChangeXlsx.rows !== 3 ||
+  !parsedWorkerChangeCsv.data["000111"]?.some((row) => row.signals.includes("commission"))
+) {
+  throw new Error("Worker Change Report CSV and XLSX files did not parse consistently.");
 }
 
 const quotaMatrix = [
@@ -766,6 +852,7 @@ changeData.currentScrById[changedEmployeeId] = {
   commissionAmount: 75,
 };
 changeData.peopleById[changedEmployeeId] = { ...people, employeeId: changedEmployeeId, fullName: "Changed Employee" };
+changeData.workerChangesById = parsedWorkerChangeCsv.data;
 changeData.positionById[changedEmployeeId] = {
   employeeId: changedEmployeeId,
   positionName: "Changed Employee (000111)",
@@ -779,6 +866,7 @@ const changeRow = changeAudit.rows.find((row) => row.employeeId === changedEmplo
 if (
   changeRow?.auditItem !== "Change to Existing Participant" ||
   changeRow.auditSubcategory !== "Promotion + Variable Change" ||
+  changeRow.wcrEffectiveDate !== "2026-07-10" ||
   changeRow.previousJobLevelGrade !== "IC3 (08.2)" ||
   changeRow.currentJobLevelGrade !== "IC4 (09.1)" ||
   changeAudit.expectations.some((item) => item.auditSubcategory !== "Promotion + Variable Change")
@@ -793,6 +881,7 @@ const changeWorkbookRows = XLSX.utils.sheet_to_json<Record<string, string>>(chan
   defval: "",
 });
 if (
+  changeWorkbookRows[0]?.wcrEffectiveDate !== "2026-07-10" ||
   changeWorkbookRows[0]?.previousJobLevelGrade !== "IC3 (08.2)" ||
   changeWorkbookRows[0]?.currentJobLevelGrade !== "IC4 (09.1)"
 ) {
@@ -811,8 +900,11 @@ const changeVerification = buildFollowUpVerification(
   },
   new Date(2026, 6, 22),
 );
-if (changeVerification.rows[0]?.auditSubcategory !== "Promotion + Variable Change") {
-  throw new Error("Verification Report did not retain the audit subcategory.");
+if (
+  changeVerification.rows[0]?.auditSubcategory !== "Promotion + Variable Change" ||
+  changeVerification.rows[0]?.wcrEffectiveDate !== "2026-07-10"
+) {
+  throw new Error("Verification Report did not retain the audit subcategory and WCR Effective Date.");
 }
 
 const careerMovementCases: Array<{

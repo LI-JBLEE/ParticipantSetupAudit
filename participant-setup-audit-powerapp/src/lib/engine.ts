@@ -27,6 +27,8 @@ import type {
   VerificationResultRow,
   VerificationRule,
   VerificationSlaStatus,
+  WorkerChangeRecord,
+  WorkerChangeSignal,
 } from "./types";
 
 const XLSX = ((XLSXImport as unknown as { default?: typeof XLSXImport }).default ?? XLSXImport) as typeof XLSXImport;
@@ -50,6 +52,7 @@ const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   currentOnLeave: "Current leave-of-absence indicator from the SCR.",
   currentFirstDayOfLeave: "First day of leave recorded in the current SCR.",
   changeSummary: "Brief explanation of the setup action, change, or data issue detected.",
+  wcrEffectiveDate: "Relevant effective date from the Worker Change Report. Multiple matching dates are separated by semicolons.",
   peoplePlanEffectiveDate: "Current plan effective date in the People record.",
   peopleBusinessUnit: "Current Business_Unit value in the People record.",
   analystName: "Analyst assigned or inferred to own the setup action. Light yellow cells indicate an inferred assignment.",
@@ -104,6 +107,7 @@ const VERIFICATION_COLUMN_DESCRIPTIONS: Record<keyof VerificationResultRow, stri
   analystSampleSize: "Number of existing employees supporting the inferred analyst assignment.",
   auditItem: "Audit action or issue carried forward from the initial audit.",
   auditSubcategory: "Operational change subtype carried forward from the initial audit baseline.",
+  wcrEffectiveDate: "Worker Change Report effective date carried forward from the initial audit.",
   progressStatus: "Overall result: Completed, Partially Completed, Pending, Manager Mismatch Only, Deferred, or Not Verifiable.",
   slaStatus: "Timeliness result based on the due date and follow-up People snapshot.",
   baselineGeneratedAt: "Date and time when the initial verification baseline was generated.",
@@ -117,19 +121,24 @@ const VERIFICATION_COLUMN_DESCRIPTIONS: Record<keyof VerificationResultRow, stri
   verificationNotes: "Notes explaining verification limitations or special handling.",
 };
 
-const REQUIRED_UPLOADS: UploadDefinition[] = [
+const UPLOAD_DEFINITIONS: UploadDefinition[] = [
   { key: "currentScr", label: "Sales Compensation Report (Current Month)", accept: ".xlsx,.xls" },
   { key: "previousScr", label: "Sales Compensation Report (Previous Month)", accept: ".xlsx,.xls" },
   { key: "people", label: "People", accept: ".xlsx,.xls" },
   { key: "position", label: "Position", accept: ".xlsx,.xls" },
+  {
+    key: "workerChangeReport",
+    label: "Worker Change Report",
+    accept: ".xlsx,.xls,.csv",
+  },
   { key: "quota", label: "Quota Assignment", accept: ".xlsx,.xls,.csv" },
   { key: "balance", label: "Payment Balance", accept: ".xls,.xlsx" },
   { key: "loa", label: "LOA Report", accept: ".xlsx,.xls" },
   { key: "msftTransfer", label: "Transfer to MSFT", accept: ".xlsx,.xls" },
 ];
 
-export function getRequiredUploads(): UploadDefinition[] {
-  return REQUIRED_UPLOADS;
+export function getUploadDefinitions(): UploadDefinition[] {
+  return UPLOAD_DEFINITIONS;
 }
 
 export function createEmptyAppData(): AppData {
@@ -143,6 +152,7 @@ export function createEmptyAppData(): AppData {
     currentScrById: {},
     previousScrById: {},
     msftTransferById: {},
+    workerChangesById: {},
   };
 }
 
@@ -525,6 +535,76 @@ export async function parseMsftTransferFile(file: File): Promise<FileParseResult
   return { fileName: file.name, rows, data: byId };
 }
 
+export async function parseWorkerChangeReportFile(
+  file: File,
+): Promise<FileParseResult<Record<string, WorkerChangeRecord[]>>> {
+  const matrix = await readMatrixFromFile(file, 0);
+  const headerIndex = findHeaderRow(matrix, ["employeeid", "effectivedate", "businessprocesstype"]);
+  if (headerIndex < 0) throw new Error("Could not find the Worker Change Report header row.");
+
+  const header = matrix[headerIndex].map(normalizeHeader);
+  const cols = {
+    employeeId: findColumn(header, ["employeeid"]),
+    effectiveDate: findColumn(header, ["effectivedate"]),
+    businessProcessType: findColumn(header, ["businessprocesstype"]),
+    businessProcessReason: findColumn(header, ["businessprocessreason"]),
+    jobCurrent: findColumn(header, ["jobprofilecurrent"]),
+    jobProposed: findColumn(header, ["jobprofileproposed"]),
+    managerCurrent: findColumn(header, ["managercurrent"]),
+    managerProposed: findColumn(header, ["managerproposed"]),
+    costCenterCurrent: findColumn(header, ["costcentercurrent"]),
+    costCenterProposed: findColumn(header, ["costcenterproposed"]),
+    companyCurrent: findColumn(header, ["companiescurrent", "companycurrent"]),
+    companyProposed: findColumn(header, ["companyproposed", "companiesproposed"]),
+    locationCurrent: findColumn(header, ["locationcurrent"]),
+    locationProposed: findColumn(header, ["locationproposed"]),
+    basePayCurrent: findColumn(header, ["basepaycurrent"]),
+    basePayProposed: findColumn(header, ["basepayproposed"]),
+    commissionCurrent: findColumn(header, ["commissionamountcurrent"]),
+    commissionProposed: findColumn(header, ["commissionamountproposed"]),
+  };
+  const currencyColumns = header
+    .map((value, index) => (value === "currency" ? index : -1))
+    .filter((index) => index >= 0);
+  const byId: Record<string, WorkerChangeRecord[]> = {};
+  let rows = 0;
+
+  for (let rowIndex = headerIndex + 1; rowIndex < matrix.length; rowIndex += 1) {
+    const row = matrix[rowIndex] ?? [];
+    const employeeId = normalizeEmployeeIdFromCell(cell(row, cols.employeeId));
+    if (!employeeId) continue;
+    const signals = new Set<WorkerChangeSignal>();
+    if (wcrValuesChanged(row, cols.jobCurrent, cols.jobProposed)) signals.add("job");
+    if (wcrValuesChanged(row, cols.managerCurrent, cols.managerProposed)) signals.add("manager");
+    if (wcrValuesChanged(row, cols.costCenterCurrent, cols.costCenterProposed)) signals.add("businessUnit");
+    if (
+      wcrValuesChanged(row, cols.companyCurrent, cols.companyProposed) ||
+      wcrValuesChanged(row, cols.locationCurrent, cols.locationProposed)
+    ) {
+      signals.add("country");
+    }
+    if (wcrValuesChanged(row, cols.basePayCurrent, cols.basePayProposed)) signals.add("ote");
+    if (wcrValuesChanged(row, cols.commissionCurrent, cols.commissionProposed)) signals.add("commission");
+    if (
+      (currencyColumns.length >= 2 && wcrValuesChanged(row, currencyColumns[0] ?? -1, currencyColumns[1] ?? -1)) ||
+      (currencyColumns.length >= 4 && wcrValuesChanged(row, currencyColumns[2] ?? -1, currencyColumns[3] ?? -1))
+    ) {
+      signals.add("currency");
+    }
+    (byId[employeeId] ??= []).push({
+      employeeId,
+      effectiveDate: toDate(cell(row, cols.effectiveDate)),
+      businessProcessType: text(cell(row, cols.businessProcessType)),
+      businessProcessReason: text(cell(row, cols.businessProcessReason)),
+      signals: [...signals],
+    });
+    rows += 1;
+  }
+
+  if (rows === 0) throw new Error("The Worker Change Report does not contain any valid employee records.");
+  return { fileName: file.name, rows, data: byId };
+}
+
 export function buildAuditReport(
   processingMonth: string,
   filters: Filters,
@@ -844,6 +924,7 @@ export function buildAuditReport(
   for (const row of rows) {
     row.previousJobLevelGrade = formatJobLevelGrade(data.previousScrById[row.employeeId]);
     row.currentJobLevelGrade = formatJobLevelGrade(data.currentScrById[row.employeeId]);
+    row.wcrEffectiveDate = resolveWcrEffectiveDate(row, data.workerChangesById[row.employeeId] ?? []);
   }
 
   rows.sort((left, right) => {
@@ -995,6 +1076,7 @@ export async function parseVerificationBaselineFile(
       analystSampleSize: toNumber(row.analystSampleSize) ?? 0,
       auditItem: text(row.auditItem),
       auditSubcategory: text(row.auditSubcategory),
+      wcrEffectiveDate: text(row.wcrEffectiveDate),
       fieldKey: text(row.fieldKey),
       fieldLabel: text(row.fieldLabel),
       baselineValue: text(row.baselineValue),
@@ -1116,6 +1198,7 @@ export function buildFollowUpVerification(
       analystSampleSize: first.analystSampleSize,
       auditItem: first.auditItem,
       auditSubcategory,
+      wcrEffectiveDate: first.wcrEffectiveDate,
       progressStatus,
       slaStatus,
       baselineGeneratedAt: first.generatedAt,
@@ -1333,6 +1416,7 @@ function buildVerificationExpectations(
         analystSampleSize: analystAssignment.sampleSize,
         auditItem: row.auditItem,
         auditSubcategory: row.auditSubcategory,
+        wcrEffectiveDate: row.wcrEffectiveDate,
         fieldKey,
         fieldLabel,
         baselineValue: getPeopleVerificationValue(people, fieldKey),
@@ -1807,6 +1891,7 @@ function createAuditRow(
     currentOnLeave: context.currentOnLeave,
     currentFirstDayOfLeave: context.currentFirstDayOfLeave,
     changeSummary: displayedChangeSummary,
+    wcrEffectiveDate: "",
     peoplePlanEffectiveDate: context.peoplePlanEffectiveDate,
     peopleBusinessUnit: context.peopleBusinessUnit,
     analystName: context.analystName,
@@ -1844,6 +1929,70 @@ function createAuditRow(
     peopleUploadDate: context.peopleUploadDate,
     ...restValues,
   };
+}
+
+function wcrValuesChanged(row: unknown[], currentColumn: number, proposedColumn: number): boolean {
+  const current = normalizeText(text(cell(row, currentColumn)));
+  const proposed = normalizeText(text(cell(row, proposedColumn)));
+  return current !== proposed && Boolean(current || proposed);
+}
+
+function resolveWcrEffectiveDate(row: AuditRow, records: WorkerChangeRecord[]): string {
+  const groups = new Map<string, { signals: Set<WorkerChangeSignal>; processText: string }>();
+  for (const record of records) {
+    const effectiveDate = formatDate(record.effectiveDate);
+    if (!effectiveDate) continue;
+    const group = groups.get(effectiveDate) ?? { signals: new Set<WorkerChangeSignal>(), processText: "" };
+    record.signals.forEach((signal) => group.signals.add(signal));
+    group.processText += " " + record.businessProcessType.toLowerCase() + " " + record.businessProcessReason.toLowerCase();
+    groups.set(effectiveDate, group);
+  }
+  if (groups.size === 0) return "";
+
+  const auditSignals = new Set<WorkerChangeSignal>();
+  if (
+    normalizeText(row.previousJobTitle) !== normalizeText(row.currentJobTitle) ||
+    normalizeText(row.previousJobLevelGrade) !== normalizeText(row.currentJobLevelGrade)
+  ) {
+    auditSignals.add("job");
+  }
+  if (normalizeText(row.previousSupervisoryManager) !== normalizeText(row.currentSupervisoryManager)) {
+    auditSignals.add("manager");
+  }
+  if (row.previousCommissionAmount !== "" || row.currentCommissionAmount !== "") auditSignals.add("commission");
+  if (row.previousBusinessUnit || row.currentBusinessUnit) auditSignals.add("businessUnit");
+  if (row.previousCountry || row.currentCountry) auditSignals.add("country");
+  if (row.previousCurrency || row.currentCurrency) auditSignals.add("currency");
+  if (row.changeSummary.includes("OTE (Base+Comm)")) auditSignals.add("ote");
+
+  const existingChangeItems = new Set([
+    "Change to Existing Participant",
+    "Deferred Change While on LOA",
+    "LOA Return with Participant Changes",
+  ]);
+  const eventPattern =
+    row.auditItem === "New Hire"
+      ? /\bhire\b|\brehire\b/
+      : row.auditItem.startsWith("Transfer to Sales") || row.auditItem === "Transfer to Non-Sales"
+        ? /\btransfer\b/
+        : row.auditItem === "Termination"
+          ? /\bterminat/
+          : row.auditItem === "LOA Start" || row.auditItem === "LOA Return"
+            ? /\bleave\b|\babsence\b/
+            : null;
+
+  const matches = [...groups.entries()]
+    .filter(([, group]) =>
+      existingChangeItems.has(row.auditItem)
+        ? [...auditSignals].some((signal) => group.signals.has(signal))
+        : Boolean(eventPattern?.test(group.processText)),
+    )
+    .map(([date]) => date)
+    .sort();
+  if (matches.length > 0) return matches.join("; ");
+
+  const supportsSingleDateFallback = existingChangeItems.has(row.auditItem) || eventPattern !== null;
+  return supportsSingleDateFallback && groups.size === 1 ? [...groups.keys()][0] ?? "" : "";
 }
 
 function formatJobLevelGrade(scr: ScrRecord | undefined): string {

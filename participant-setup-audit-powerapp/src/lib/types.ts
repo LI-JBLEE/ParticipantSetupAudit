@@ -109,6 +109,23 @@ export interface MsftTransferRecord {
   region: string;
 }
 
+export type WorkerChangeSignal =
+  | "job"
+  | "manager"
+  | "businessUnit"
+  | "country"
+  | "ote"
+  | "commission"
+  | "currency";
+
+export interface WorkerChangeRecord {
+  employeeId: string;
+  effectiveDate: Date | null;
+  businessProcessType: string;
+  businessProcessReason: string;
+  signals: WorkerChangeSignal[];
+}
+
 export interface AppData {
   peopleById: Record<string, PeopleRecord>;
   peopleHistoryById: Record<string, PeopleRecord[]>;
@@ -119,6 +136,7 @@ export interface AppData {
   currentScrById: Record<string, ScrRecord>;
   previousScrById: Record<string, ScrRecord>;
   msftTransferById: Record<string, MsftTransferRecord>;
+  workerChangesById: Record<string, WorkerChangeRecord[]>;
 }
 
 export interface Filters {
@@ -146,6 +164,7 @@ export interface AuditRow {
   currentOnLeave: string;
   currentFirstDayOfLeave: string;
   changeSummary: string;
+  wcrEffectiveDate: string;
   peoplePlanEffectiveDate: string;
   peopleBusinessUnit: string;
   analystName: string;
@@ -210,6 +229,7 @@ export interface VerificationExpectation {
   analystSampleSize: number;
   auditItem: string;
   auditSubcategory: string;
+  wcrEffectiveDate: string;
   fieldKey: string;
   fieldLabel: string;
   baselineValue: string;
@@ -251,6 +271,7 @@ export interface VerificationResultRow {
   analystSampleSize: number;
   auditItem: string;
   auditSubcategory: string;
+  wcrEffectiveDate: string;
   progressStatus: VerificationProgressStatus;
   slaStatus: VerificationSlaStatus;
   baselineGeneratedAt: string;
@@ -305,7 +326,8 @@ export interface UploadDefinition {
     | "loa"
     | "currentScr"
     | "previousScr"
-    | "msftTransfer";
+    | "msftTransfer"
+    | "workerChangeReport";
   label: string;
   accept: string;
 }
