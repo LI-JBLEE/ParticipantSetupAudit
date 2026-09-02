@@ -159,6 +159,8 @@ const scr = (employeeId: string, hireDate: Date, fullName: string, country = "Si
   isRehire: "No",
   terminationDate: null,
   jobTitle: "Account Executive",
+  jobLevel: "IC3",
+  jobGrade: "08.2",
   supervisoryManager: "Manager (123456)",
   oteBaseComm: 150,
   commissionAmount: 50,
@@ -173,8 +175,8 @@ const parsedScr = await parseScrFile(
   new File(
     [
       [
-        "Employee ID,Active Status,Hire Date,Business Unit,Country,Job Family Group,Job Family,Cost Center - ID,Cost Center",
-        "000100,Yes,2020-01-01,Other,Singapore,Wrong Group,Sales Development Representative,12345,NAMER GCP Enterprise",
+        "Employee ID,Active Status,Hire Date,Business Unit,Country,Job Family Group,Job Family,Cost Center - ID,Cost Center,CF-CB-Career Band/Level - Worker,CF LRV Global Job grade",
+        "000100,Yes,2020-01-01,Other,Singapore,Wrong Group,Sales Development Representative,12345,NAMER GCP Enterprise,MR2,09.1",
       ].join("\n"),
     ],
     "scr.csv",
@@ -183,9 +185,11 @@ const parsedScr = await parseScrFile(
 );
 if (
   parsedScr.data["000100"]?.jobFamily !== "Sales Development Representative" ||
-  parsedScr.data["000100"]?.costCenter !== "NAMER GCP Enterprise"
+  parsedScr.data["000100"]?.costCenter !== "NAMER GCP Enterprise" ||
+  parsedScr.data["000100"]?.jobLevel !== "MR2" ||
+  parsedScr.data["000100"]?.jobGrade !== "09.1"
 ) {
-  throw new Error("SCR parser did not select the exact Job Family and Cost Center columns.");
+  throw new Error("SCR parser did not select the exact Job Family, Cost Center, Job Level, and Job Grade columns.");
 }
 
 const quotaMatrix = [
@@ -510,6 +514,8 @@ const inferredExpectation = inferredAudit.expectations.find((item) => item.emplo
 const inferredAuditRow = inferredAudit.rows.find((item) => item.employeeId === "000083");
 if (
   inferredAuditRow?.analystName !== people.analystName ||
+  inferredAuditRow.previousJobLevelGrade !== "" ||
+  inferredAuditRow.currentJobLevelGrade !== "IC3 (08.2)" ||
   inferredExpectation?.analystName !== people.analystName ||
   inferredExpectation.analystSource !== "Inferred: Country + LOB" ||
   inferredExpectation.analystConfidence !== "100%" ||
@@ -599,6 +605,8 @@ changeData.previousScrById[changedEmployeeId] = scr(changedEmployeeId, new Date(
 changeData.currentScrById[changedEmployeeId] = {
   ...changeData.previousScrById[changedEmployeeId],
   jobTitle: "Senior Account Executive",
+  jobLevel: "IC4",
+  jobGrade: "09.1",
   commissionAmount: 75,
 };
 changeData.peopleById[changedEmployeeId] = { ...people, employeeId: changedEmployeeId, fullName: "Changed Employee" };
@@ -614,10 +622,25 @@ const changeAudit = buildAuditReport("JUL-2026", filters, changeData, countryToR
 const changeRow = changeAudit.rows.find((row) => row.employeeId === changedEmployeeId);
 if (
   changeRow?.auditItem !== "Change to Existing Participant" ||
-  changeRow.auditSubcategory !== "Variable + Other Changes" ||
-  changeAudit.expectations.some((item) => item.auditSubcategory !== "Variable + Other Changes")
+  changeRow.auditSubcategory !== "Promotion + Variable Change" ||
+  changeRow.previousJobLevelGrade !== "IC3 (08.2)" ||
+  changeRow.currentJobLevelGrade !== "IC4 (09.1)" ||
+  changeAudit.expectations.some((item) => item.auditSubcategory !== "Promotion + Variable Change")
 ) {
-  throw new Error("Audit and Verification Baseline did not carry the Variable + Other Changes subcategory.");
+  throw new Error("Audit and Verification Baseline did not carry the promotion classification or Job Level (Grade) values.");
+}
+const changeWorkbook = XLSX.read(
+  buildAuditWorkbook(changeAudit.rows, {}, changeAudit.expectations, changeData.currentScrById),
+  { type: "array" },
+);
+const changeWorkbookRows = XLSX.utils.sheet_to_json<Record<string, string>>(changeWorkbook.Sheets["Audit Report"], {
+  defval: "",
+});
+if (
+  changeWorkbookRows[0]?.previousJobLevelGrade !== "IC3 (08.2)" ||
+  changeWorkbookRows[0]?.currentJobLevelGrade !== "IC4 (09.1)"
+) {
+  throw new Error("Audit Excel did not retain the previous and current Job Level (Grade) values.");
 }
 const changeVerification = buildFollowUpVerification(
   changeAudit.expectations,
@@ -632,8 +655,114 @@ const changeVerification = buildFollowUpVerification(
   },
   new Date(2026, 6, 22),
 );
-if (changeVerification.rows[0]?.auditSubcategory !== "Variable + Other Changes") {
+if (changeVerification.rows[0]?.auditSubcategory !== "Promotion + Variable Change") {
   throw new Error("Verification Report did not retain the audit subcategory.");
+}
+
+const careerMovementCases: Array<{
+  name: string;
+  previous: Partial<ScrRecord>;
+  current: Partial<ScrRecord>;
+  expectedSubcategory: string;
+}> = [
+  {
+    name: "higher grade with variable change",
+    previous: { jobLevel: "IC3", jobGrade: "08.2", commissionAmount: 50 },
+    current: { jobLevel: "IC4", jobGrade: "09.1", commissionAmount: 75 },
+    expectedSubcategory: "Promotion + Variable Change",
+  },
+  {
+    name: "same-grade IC to manager",
+    previous: { jobLevel: "IC3", jobGrade: "08.2" },
+    current: { jobLevel: "MR2", jobGrade: "08.2" },
+    expectedSubcategory: "Promotion - No Variable Change",
+  },
+  {
+    name: "same-grade IC to SP",
+    previous: { jobLevel: "IC1", jobGrade: "06" },
+    current: { jobLevel: "SP4", jobGrade: "06" },
+    expectedSubcategory: "Job Change - No Variable Change",
+  },
+  {
+    name: "lower grade",
+    previous: { jobLevel: "IC4", jobGrade: "09.1" },
+    current: { jobLevel: "IC3", jobGrade: "08.2" },
+    expectedSubcategory: "Job Change - No Variable Change",
+  },
+  {
+    name: "unknown grade",
+    previous: { jobLevel: "IC3", jobGrade: "B" },
+    current: { jobLevel: "IC4", jobGrade: "C" },
+    expectedSubcategory: "Job Change - No Variable Change",
+  },
+];
+for (const [index, testCase] of careerMovementCases.entries()) {
+  const employeeId = `0002${index + 10}`;
+  const movementData = createEmptyAppData();
+  const previousRecord = {
+    ...scr(employeeId, new Date(2020, 0, 1), `Career Case ${index}`),
+    ...testCase.previous,
+  };
+  movementData.previousScrById[employeeId] = previousRecord;
+  movementData.currentScrById[employeeId] = { ...previousRecord, ...testCase.current };
+  movementData.peopleById[employeeId] = { ...people, employeeId, fullName: `Career Case ${index}` };
+  movementData.positionById[employeeId] = {
+    employeeId,
+    positionName: `Career Case ${index} (${employeeId})`,
+    personName: `Career Case ${index} (${employeeId})`,
+    title: movementData.currentScrById[employeeId].jobTitle,
+    businessGroup: "Sales",
+    effectiveStartDate: new Date(2020, 0, 1),
+  };
+  const movementAudit = buildAuditReport("JUL-2026", filters, movementData, countryToRegion, new Date(2026, 6, 16));
+  const movementRow = movementAudit.rows.find((row) => row.employeeId === employeeId);
+  if (movementRow?.auditSubcategory !== testCase.expectedSubcategory) {
+    throw new Error(
+      `${testCase.name} classified as ${movementRow?.auditSubcategory || "no row"}; expected ${testCase.expectedSubcategory}.`,
+    );
+  }
+}
+
+const gradeOnlyEmployeeId = "000299";
+const gradeOnlyData = createEmptyAppData();
+gradeOnlyData.previousScrById[gradeOnlyEmployeeId] = scr(
+  gradeOnlyEmployeeId,
+  new Date(2020, 0, 1),
+  "Grade Only Employee",
+);
+gradeOnlyData.currentScrById[gradeOnlyEmployeeId] = {
+  ...gradeOnlyData.previousScrById[gradeOnlyEmployeeId],
+  jobGrade: "09.1",
+};
+gradeOnlyData.peopleById[gradeOnlyEmployeeId] = {
+  ...people,
+  employeeId: gradeOnlyEmployeeId,
+  fullName: "Grade Only Employee",
+};
+gradeOnlyData.positionById[gradeOnlyEmployeeId] = {
+  employeeId: gradeOnlyEmployeeId,
+  positionName: "Grade Only Employee (000299)",
+  personName: "Grade Only Employee (000299)",
+  title: "Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2020, 0, 1),
+};
+const gradeOnlyAudit = buildAuditReport("JUL-2026", filters, gradeOnlyData, countryToRegion, new Date(2026, 6, 16));
+if (
+  gradeOnlyAudit.rows[0]?.auditSubcategory !== "Promotion - No Variable Change" ||
+  gradeOnlyAudit.expectations.length !== 1 ||
+  gradeOnlyAudit.expectations[0]?.fieldKey !== "jobGrade" ||
+  gradeOnlyAudit.expectations[0]?.rule !== "unverifiable"
+) {
+  throw new Error("A grade-only promotion was not audited with an unverifiable People follow-up expectation.");
+}
+const gradeOnlyVerification = buildFollowUpVerification(
+  gradeOnlyAudit.expectations,
+  gradeOnlyData.peopleById,
+  new Date(2026, 6, 22),
+);
+if (gradeOnlyVerification.rows[0]?.progressStatus !== "Not Verifiable") {
+  throw new Error("A grade-only promotion did not remain Not Verifiable in the People-only follow-up.");
 }
 
 const transferEmployeeId = "000085";

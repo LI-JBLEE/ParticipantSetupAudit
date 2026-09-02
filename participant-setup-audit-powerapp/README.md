@@ -41,11 +41,17 @@ npm run build
    - `Verification Baseline` sheet
    - `SCR Population` sheet
 
-`Audit Report` includes `auditSubcategory` immediately after `auditItem`. Participant changes use controlled operational subcategories:
+`Audit Report` includes `auditSubcategory` immediately after `auditItem`, plus `previousJobLevelGrade` and `currentJobLevelGrade`. The two SCR values are displayed as `Level (Grade)`, for example `MR2 (09.1)`.
+
+Participant changes use controlled operational subcategories:
 
 - `Manager Change Only`
 - `Variable Change Only`
 - `Variable + Other Changes`
+- `Promotion + Variable Change`
+- `Promotion - No Variable Change`
+- `Job Change + Variable Change`
+- `Job Change - No Variable Change`
 - `Job Title Change Only`
 - `OTE Change Only`
 - `Business Unit Change Only`
@@ -54,6 +60,8 @@ npm run build
 - `Multiple Changes - No Variable`
 
 The exact changed fields remain in `changeSummary`.
+
+For an existing participant, a Job Title, Job Level, or Job Grade change is classified as a career movement. It is a `Promotion` when the normalized Job Grade rises in this order: `04 < 05 < 06 < 07 < 08.1 < 08.2 < 09.1 < 09.2 < 09.3 < 10 < 11 < 12 < A`. A same-grade change from an `IC` level to an `MR` level is also a Promotion. Other career movements, including same-grade IC/SP changes, lower grades, and unknown grades, are classified as `Job Change`. The suffix records whether Commission Amount also changed.
 
 ## Follow-up verification
 
@@ -64,7 +72,7 @@ The exact changed fields remain in `changeSummary`.
 
 The verification workbook includes `Verification Report`, `Column Guide`, `Field Details`, and `Summary`. `auditSubcategory` is carried from the initial audit through the Verification Baseline and into the Verification Report. Older audit workbooks without this column derive it from their verification field set.
 
-Business Unit, Position, and OKR changes remain `Not Verifiable` when the People-only follow-up does not contain an approved direct mapping.
+Job Level, Job Grade, Business Unit, Position, and OKR changes remain `Not Verifiable` when the People-only follow-up does not contain an approved direct mapping.
 
 ## Dashboard
 

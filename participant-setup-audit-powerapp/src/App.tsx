@@ -60,6 +60,8 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "missingPositionSetup", label: "Missing Position Setup" },
   { key: "previousJobTitle", label: "Previous Job Title" },
   { key: "currentJobTitle", label: "Current Job Title" },
+  { key: "previousJobLevelGrade", label: "Previous Job Level (Grade)" },
+  { key: "currentJobLevelGrade", label: "Current Job Level (Grade)" },
   { key: "previousSupervisoryManager", label: "Previous Supervisory Manager" },
   { key: "currentSupervisoryManager", label: "Current Supervisory Manager" },
   { key: "previousCommissionAmount", label: "Previous Commission Amount" },
@@ -689,7 +691,8 @@ function App() {
                 <li>Upload all eight required source files shown in the workspace.</li>
                 <li>Adjust Region, LOB, or Country filters if Select All is not required.</li>
                 <li>Click Generate Report, review warnings, and validate the Audit Results.</li>
-                <li>Use Audit Subcategory to separate single-field changes, Variable + Other Changes, and Multiple Changes without Variable.</li>
+                <li>Use Audit Subcategory to distinguish single-field changes, Promotions, Job Changes, and whether Variable Compensation also changed.</li>
+                <li>Compare Previous and Current Job Level (Grade) values from the two SCR files when reviewing career movements.</li>
                 <li>Download the Excel file for analyst action and later verification.</li>
               </ol>
               <p className="instruction-note">
@@ -751,7 +754,9 @@ function App() {
                 <li>Missing Analyst assignments use Country + LOB, then Region + LOB; ties remain Unassigned.</li>
                 <li>New Hire and Transfer to Sales use inferred ownership instead of the employee's historical People Analyst.</li>
                 <li>In Audit Excel, a light yellow Analyst Name cell marks an inferred assignment.</li>
-                <li>Variable Change Only and Variable + Other Changes both require the Annual Variable update to be verified.</li>
+                <li>Any Audit Subcategory containing Variable Change requires the Annual Variable update to be verified.</li>
+                <li>A higher Job Grade, or a same-grade IC-to-MR move, is classified as Promotion; other career movements are Job Change.</li>
+                <li>Job Level and Job Grade are not available in the People-only follow-up and therefore remain Not Verifiable.</li>
               </ul>
             </article>
 

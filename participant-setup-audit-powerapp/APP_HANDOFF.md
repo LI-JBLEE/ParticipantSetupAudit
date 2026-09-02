@@ -251,6 +251,8 @@ This logic exists in:
 Compared fields:
 
 - `Job Title`
+- `Job Level` from SCR `CF-CB-Career Band/Level - Worker`
+- `Job Grade` from SCR `CF LRV Global Job grade`
 - `Supervisory Manager`
 - `OTE (Base+Comm)`
 - `Commission Amount`
@@ -262,10 +264,13 @@ Important note:
 
 - The app still checks `OTE (Base+Comm)` changes for `changeSummary`.
 - However, the `previousOteBaseComm` and `currentOteBaseComm` output columns were removed from the report.
-- `auditSubcategory` is derived from the changed field set:
-  - Single-field changes use the corresponding `* Change Only` value.
-  - Multiple changes containing Commission Amount use `Variable + Other Changes`.
-  - Multiple changes without Commission Amount use `Multiple Changes - No Variable`.
+- `previousJobLevelGrade` and `currentJobLevelGrade` show the two SCR values as `Level (Grade)`, for example `MR2 (09.1)`. New Hires have no previous value.
+- When Job Title, Job Level, or Job Grade changes, `auditSubcategory` uses a career-movement classification:
+  - A higher normalized grade is `Promotion` using `04 < 05 < 06 < 07 < 08.1 < 08.2 < 09.1 < 09.2 < 09.3 < 10 < 11 < 12 < A`.
+  - The same nonblank grade with an `IC` to `MR` level change is also `Promotion`.
+  - Same-grade IC/SP changes, lower grades, and unknown or incomplete grade movements are `Job Change`.
+  - The final value is `Promotion + Variable Change`, `Promotion - No Variable Change`, `Job Change + Variable Change`, or `Job Change - No Variable Change`.
+- Changes without a career movement retain the existing single-field, `Variable + Other Changes`, or `Multiple Changes - No Variable` classification.
 - The exact changed fields remain in `changeSummary`.
 
 ### Deferred Change While on LOA
@@ -432,7 +437,8 @@ Sheets:
 ### Audit Subcategory
 
 - Audit Results and Follow-up Verification tables display `Audit Subcategory` next to `Audit Item`.
-- `Variable Change Only` and `Variable + Other Changes` identify every audit action that requires an Annual Variable update.
+- `Variable Change Only`, `Variable + Other Changes`, `Promotion + Variable Change`, and `Job Change + Variable Change` identify every audit action that requires an Annual Variable update.
+- Audit Results also displays Previous and Current Job Level (Grade). Job Level and Job Grade expectations are carried into Verification as `Not Verifiable` because the People-only follow-up does not contain those SCR fields.
 - `Manager Change Only` continues to use the separate `Manager Mismatch Only` verification treatment and remains outside Setup Required and Completion Rate.
 
 ## 14. Known sample-data observations

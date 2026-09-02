@@ -35,6 +35,7 @@ const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SE
 const REGION_OPTIONS = ["APAC", "EMEA", "LATAM", "NAMER"];
 const CURRENTLY_ON_LOA_PREFIX = "[Currently on LOA]";
 const NEGATIVE_BALANCE_MATERIALITY_THRESHOLD = 1;
+const JOB_GRADE_ORDER = ["4", "5", "6", "7", "8.1", "8.2", "9.1", "9.2", "9.3", "10", "11", "12", "a"];
 
 const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   auditItem: "Consolidated audit action or issue identified for the employee.",
@@ -61,6 +62,8 @@ const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   missingPositionSetup: "Indicates whether the employee is missing from the Position setup.",
   previousJobTitle: "Job title in the previous-month SCR.",
   currentJobTitle: "Job title in the current-month SCR.",
+  previousJobLevelGrade: "Job level and global job grade in the previous-month SCR, displayed as Level (Grade).",
+  currentJobLevelGrade: "Job level and global job grade in the current-month SCR, displayed as Level (Grade).",
   previousSupervisoryManager: "Supervisory manager in the previous-month SCR.",
   currentSupervisoryManager: "Supervisory manager in the current-month SCR.",
   previousCommissionAmount: "Commission amount in the previous-month SCR.",
@@ -429,6 +432,8 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
     isRehire: findExactColumn(header, ["isrehire"], ["isrehire"]),
     terminationDate: findColumn(header, ["terminationdate"]),
     jobTitle: findColumn(header, ["jobtitle"]),
+    jobLevel: findExactColumn(header, ["cfcbcareerbandlevelworker"], ["careerbandlevelworker"]),
+    jobGrade: findExactColumn(header, ["cflrvglobaljobgrade"], ["globaljobgrade"]),
     supervisoryManager: findColumn(header, ["supervisorymanager"]),
     oteBaseComm: findColumn(header, ["otebasecomm"]),
     commissionAmount: findColumn(header, ["commissionamount"]),
@@ -462,6 +467,8 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
       isRehire: text(cell(row, cols.isRehire)),
       terminationDate: toDate(cell(row, cols.terminationDate)),
       jobTitle: text(cell(row, cols.jobTitle)),
+      jobLevel: text(cell(row, cols.jobLevel)),
+      jobGrade: text(cell(row, cols.jobGrade)),
       supervisoryManager: text(cell(row, cols.supervisoryManager)),
       oteBaseComm: toNumber(cell(row, cols.oteBaseComm)),
       commissionAmount: toNumber(cell(row, cols.commissionAmount)),
@@ -629,6 +636,8 @@ export function buildAuditReport(
 
     const changes = [
       compareField("Job Title", previous.jobTitle, current.jobTitle),
+      compareField("Job Level", previous.jobLevel, current.jobLevel),
+      compareField("Job Grade", previous.jobGrade, current.jobGrade),
       compareField("Supervisory Manager", previous.supervisoryManager, current.supervisoryManager),
       compareField("OTE (Base+Comm)", previous.oteBaseComm, current.oteBaseComm),
       compareField("Commission Amount", previous.commissionAmount, current.commissionAmount),
@@ -655,7 +664,7 @@ export function buildAuditReport(
           current.fullName || context.name,
           context,
           {
-            auditSubcategory: deriveAuditSubcategory(changes.map((item) => item.label)),
+            auditSubcategory: deriveExistingParticipantSubcategory(changes, previous, current),
             previousJobTitle: hasChanged(changes, "Job Title") ? previous.jobTitle : "",
             currentJobTitle: hasChanged(changes, "Job Title") ? current.jobTitle : "",
             previousSupervisoryManager: hasChanged(changes, "Supervisory Manager") ? previous.supervisoryManager : "",
@@ -802,6 +811,11 @@ export function buildAuditReport(
     );
   }
 
+  for (const row of rows) {
+    row.previousJobLevelGrade = formatJobLevelGrade(data.previousScrById[row.employeeId]);
+    row.currentJobLevelGrade = formatJobLevelGrade(data.currentScrById[row.employeeId]);
+  }
+
   rows.sort((left, right) => {
     const itemCompare = left.auditItem.localeCompare(right.auditItem);
     if (itemCompare !== 0) return itemCompare;
@@ -882,6 +896,8 @@ export function buildAuditWorkbook(
       fullName: current.fullName,
       activeStatus: current.activeStatus,
       onLeave: current.onLeave,
+      jobLevel: current.jobLevel,
+      jobGrade: current.jobGrade,
       costCenter: current.costCenter,
       jobFamily: current.jobFamily,
       businessUnit: current.businessUnit,
@@ -968,6 +984,8 @@ export async function parseVerificationBaselineFile(
         isRehire: "",
         terminationDate: null,
         jobTitle: "",
+        jobLevel: text(row.jobLevel),
+        jobGrade: text(row.jobGrade),
         supervisoryManager: "",
         oteBaseComm: null,
         commissionAmount: null,
@@ -1321,6 +1339,12 @@ function buildVerificationExpectations(
     ) {
       if (compareField("Job Title", previous.jobTitle, current.jobTitle).changed) {
         add("hrJobTitle", "HR Job Title", current.jobTitle, "text");
+      }
+      if (compareField("Job Level", previous.jobLevel, current.jobLevel).changed) {
+        add("jobLevel", "Job Level", current.jobLevel, "unverifiable", "Job Level is not available in the People-only follow-up.");
+      }
+      if (compareField("Job Grade", previous.jobGrade, current.jobGrade).changed) {
+        add("jobGrade", "Job Grade", current.jobGrade, "unverifiable", "Job Grade is not available in the People-only follow-up.");
       }
       if (compareField("Supervisory Manager", previous.supervisoryManager, current.supervisoryManager).changed) {
         add("level1Manager", "Level 1 Manager", current.supervisoryManager, "text");
@@ -1695,6 +1719,8 @@ function createAuditRow(
     missingPositionSetup: "",
     previousJobTitle: "",
     currentJobTitle: "",
+    previousJobLevelGrade: "",
+    currentJobLevelGrade: "",
     previousSupervisoryManager: "",
     currentSupervisoryManager: "",
     previousCommissionAmount: "",
@@ -1715,6 +1741,12 @@ function createAuditRow(
     peopleUploadDate: context.peopleUploadDate,
     ...restValues,
   };
+}
+
+function formatJobLevelGrade(scr: ScrRecord | undefined): string {
+  const level = text(scr?.jobLevel);
+  const grade = text(scr?.jobGrade);
+  return level && grade ? `${level} (${grade})` : level || grade;
 }
 
 interface ResolvedContext {
@@ -1835,6 +1867,45 @@ function compareField(label: string, previous: unknown, current: unknown): { lab
   return { label, changed: normalizeText(previous) !== normalizeText(current) };
 }
 
+function deriveExistingParticipantSubcategory(
+  changes: { label: string; changed: boolean }[],
+  previous: ScrRecord,
+  current: ScrRecord,
+): string {
+  const movement = classifyCareerMovement(previous, current);
+  if (!movement) return deriveAuditSubcategory(changes.map((item) => item.label));
+  return hasChanged(changes, "Commission Amount")
+    ? `${movement} + Variable Change`
+    : `${movement} - No Variable Change`;
+}
+
+function classifyCareerMovement(previous: ScrRecord, current: ScrRecord): "Promotion" | "Job Change" | "" {
+  const careerChanged =
+    compareField("Job Title", previous.jobTitle, current.jobTitle).changed ||
+    compareField("Job Level", previous.jobLevel, current.jobLevel).changed ||
+    compareField("Job Grade", previous.jobGrade, current.jobGrade).changed;
+  if (!careerChanged) return "";
+
+  const previousGrade = normalizeJobGrade(previous.jobGrade);
+  const currentGrade = normalizeJobGrade(current.jobGrade);
+  const previousRank = JOB_GRADE_ORDER.indexOf(previousGrade);
+  const currentRank = JOB_GRADE_ORDER.indexOf(currentGrade);
+  if (previousRank >= 0 && currentRank > previousRank) return "Promotion";
+  if (
+    previousGrade &&
+    previousGrade === currentGrade &&
+    /^ic/i.test(text(previous.jobLevel)) &&
+    /^mr/i.test(text(current.jobLevel))
+  ) {
+    return "Promotion";
+  }
+  return "Job Change";
+}
+
+function normalizeJobGrade(value: unknown): string {
+  return normalizeText(value).replace(/^0+(?=\d)/, "");
+}
+
 export function deriveAuditSubcategory(changeLabels: readonly string[]): string {
   const labels = [...new Set(changeLabels.filter(Boolean))];
   if (labels.length === 0) return "";
@@ -1844,6 +1915,8 @@ export function deriveAuditSubcategory(changeLabels: readonly string[]): string 
   return (
     {
       "Job Title": "Job Title Change Only",
+      "Job Level": "Job Change - No Variable Change",
+      "Job Grade": "Job Change - No Variable Change",
       "Supervisory Manager": "Manager Change Only",
       "OTE (Base+Comm)": "OTE Change Only",
       "Commission Amount": "Variable Change Only",
@@ -1865,6 +1938,8 @@ function deriveVerificationSubcategory(results: VerificationFieldResult[]): stri
   }
   const changeLabelByFieldKey: Record<string, string> = {
     hrJobTitle: "Job Title",
+    jobLevel: "Job Level",
+    jobGrade: "Job Grade",
     level1Manager: "Supervisory Manager",
     salary: "OTE (Base+Comm)",
     annualVariable: "Commission Amount",

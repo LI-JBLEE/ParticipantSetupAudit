@@ -88,6 +88,8 @@ export interface ScrRecord {
   isRehire: string;
   terminationDate: Date | null;
   jobTitle: string;
+  jobLevel: string;
+  jobGrade: string;
   supervisoryManager: string;
   oteBaseComm: number | null;
   commissionAmount: number | null;
@@ -156,6 +158,8 @@ export interface AuditRow {
   missingPositionSetup: string;
   previousJobTitle: string;
   currentJobTitle: string;
+  previousJobLevelGrade: string;
+  currentJobLevelGrade: string;
   previousSupervisoryManager: string;
   currentSupervisoryManager: string;
   previousCommissionAmount: number | "";
