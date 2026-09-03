@@ -869,9 +869,12 @@ if (
   changeRow.wcrEffectiveDate !== "2026-07-10" ||
   changeRow.previousJobLevelGrade !== "IC3 (08.2)" ||
   changeRow.currentJobLevelGrade !== "IC4 (09.1)" ||
+  changeRow.peopleAnnualVariable !== 50 ||
+  changeRow.variableCompensationGap !== 25 ||
+  !changeRow.changeSummary.includes("SCR Commission Amount 75 vs People Annual Variable 50 (Gap +25)") ||
   changeAudit.expectations.some((item) => item.auditSubcategory !== "Promotion + Variable Change")
 ) {
-  throw new Error("Audit and Verification Baseline did not carry the promotion classification or Job Level (Grade) values.");
+  throw new Error("Audit did not retain the promotion classification or merge the SCR-to-People Variable gap.");
 }
 const changeWorkbook = XLSX.read(
   buildAuditWorkbook(changeAudit.rows, {}, changeAudit.expectations, changeData.currentScrById),
@@ -883,9 +886,11 @@ const changeWorkbookRows = XLSX.utils.sheet_to_json<Record<string, string>>(chan
 if (
   changeWorkbookRows[0]?.wcrEffectiveDate !== "2026-07-10" ||
   changeWorkbookRows[0]?.previousJobLevelGrade !== "IC3 (08.2)" ||
-  changeWorkbookRows[0]?.currentJobLevelGrade !== "IC4 (09.1)"
+  changeWorkbookRows[0]?.currentJobLevelGrade !== "IC4 (09.1)" ||
+  Number(changeWorkbookRows[0]?.peopleAnnualVariable) !== 50 ||
+  Number(changeWorkbookRows[0]?.variableCompensationGap) !== 25
 ) {
-  throw new Error("Audit Excel did not retain the previous and current Job Level (Grade) values.");
+  throw new Error("Audit Excel did not retain the career movement and Variable reconciliation values.");
 }
 const changeVerification = buildFollowUpVerification(
   changeAudit.expectations,
@@ -905,6 +910,75 @@ if (
   changeVerification.rows[0]?.wcrEffectiveDate !== "2026-07-10"
 ) {
   throw new Error("Verification Report did not retain the audit subcategory and WCR Effective Date.");
+}
+
+const variableMismatchData = createEmptyAppData();
+const variableMismatchCases = [
+  { employeeId: "000130", name: "Positive Gap", commissionAmount: 60, peopleAnnualVariable: 50 },
+  { employeeId: "000131", name: "Below Threshold", commissionAmount: 59, peopleAnnualVariable: 50 },
+  { employeeId: "000132", name: "Negative Gap", commissionAmount: 40, peopleAnnualVariable: 50 },
+];
+for (const item of variableMismatchCases) {
+  const current = {
+    ...scr(item.employeeId, new Date(2020, 0, 1), item.name),
+    commissionAmount: item.commissionAmount,
+  };
+  variableMismatchData.previousScrById[item.employeeId] = current;
+  variableMismatchData.currentScrById[item.employeeId] = { ...current };
+  variableMismatchData.peopleById[item.employeeId] = {
+    ...people,
+    employeeId: item.employeeId,
+    fullName: item.name,
+    annualVariable: item.peopleAnnualVariable,
+  };
+  variableMismatchData.positionById[item.employeeId] = {
+    employeeId: item.employeeId,
+    positionName: `${item.name} (${item.employeeId})`,
+    personName: `${item.name} (${item.employeeId})`,
+    title: current.jobTitle,
+    businessGroup: "Sales",
+    effectiveStartDate: new Date(2020, 0, 1),
+  };
+}
+const variableMismatchAudit = buildAuditReport(
+  "JUL-2026",
+  filters,
+  variableMismatchData,
+  countryToRegion,
+  new Date(2026, 6, 16),
+);
+const positiveGapRow = variableMismatchAudit.rows.find((row) => row.employeeId === "000130");
+const negativeGapRow = variableMismatchAudit.rows.find((row) => row.employeeId === "000132");
+if (
+  positiveGapRow?.auditItem !== "Variable Compensation Mismatch" ||
+  positiveGapRow.auditSubcategory !== "Variable Mismatch Only" ||
+  positiveGapRow.variableCompensationGap !== 10 ||
+  negativeGapRow?.variableCompensationGap !== -10 ||
+  variableMismatchAudit.rows.some((row) => row.employeeId === "000131")
+) {
+  throw new Error("Variable mismatch audit did not enforce the inclusive +/-10 materiality threshold.");
+}
+if (
+  variableMismatchAudit.expectations.length !== 2 ||
+  variableMismatchAudit.expectations.some(
+    (item) => item.fieldKey !== "annualVariable" || item.auditItem !== "Variable Compensation Mismatch",
+  )
+) {
+  throw new Error("Variable mismatch did not create one Annual Variable verification expectation per material gap.");
+}
+const variableToleranceVerification = buildFollowUpVerification(
+  variableMismatchAudit.expectations,
+  {
+    "000130": { ...variableMismatchData.peopleById["000130"], annualVariable: 51 },
+    "000132": { ...variableMismatchData.peopleById["000132"], annualVariable: 30 },
+  },
+  new Date(2026, 6, 22),
+);
+if (
+  variableToleranceVerification.rows.find((row) => row.employeeId === "000130")?.progressStatus !== "Completed" ||
+  variableToleranceVerification.rows.find((row) => row.employeeId === "000132")?.progressStatus !== "Pending"
+) {
+  throw new Error("Annual Variable verification did not treat gaps below 10 as complete and gaps of 10 as pending.");
 }
 
 const careerMovementCases: Array<{

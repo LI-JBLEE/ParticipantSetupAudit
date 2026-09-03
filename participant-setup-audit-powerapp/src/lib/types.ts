@@ -186,6 +186,8 @@ export interface AuditRow {
   currentSupervisoryManager: string;
   previousCommissionAmount: number | "";
   currentCommissionAmount: number | "";
+  peopleAnnualVariable: number | "";
+  variableCompensationGap: number | "";
   previousBusinessUnit: string;
   currentBusinessUnit: string;
   previousCountry: string;

@@ -37,6 +37,7 @@ const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SE
 const REGION_OPTIONS = ["APAC", "EMEA", "LATAM", "NAMER"];
 const CURRENTLY_ON_LOA_PREFIX = "[Currently on LOA]";
 const NEGATIVE_BALANCE_MATERIALITY_THRESHOLD = 1;
+const VARIABLE_COMPENSATION_MATERIALITY_THRESHOLD = 10;
 const JOB_GRADE_ORDER = ["4", "5", "6", "7", "8.1", "8.2", "9.1", "9.2", "9.3", "10", "11", "12", "a"];
 
 const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
@@ -74,6 +75,8 @@ const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   currentSupervisoryManager: "Supervisory manager in the current-month SCR.",
   previousCommissionAmount: "Commission amount in the previous-month SCR.",
   currentCommissionAmount: "Commission amount in the current-month SCR.",
+  peopleAnnualVariable: "Annual_Variable value in the current People record when the SCR-to-People gap is 10 or more.",
+  variableCompensationGap: "Current SCR Commission Amount minus People Annual_Variable when the absolute gap is 10 or more.",
   previousBusinessUnit: "Business unit in the previous-month SCR.",
   currentBusinessUnit: "Business unit in the current-month SCR.",
   previousCountry: "Country in the previous-month SCR.",
@@ -921,6 +924,8 @@ export function buildAuditReport(
     );
   }
 
+  appendVariableCompensationMismatches(rows, processingMonth, filters, data, countryToRegion);
+
   for (const row of rows) {
     row.previousJobLevelGrade = formatJobLevelGrade(data.previousScrById[row.employeeId]);
     row.currentJobLevelGrade = formatJobLevelGrade(data.currentScrById[row.employeeId]);
@@ -1451,6 +1456,13 @@ function buildVerificationExpectations(
       }
     };
 
+    if (row.auditItem === "Variable Compensation Mismatch") {
+      if (current?.commissionAmount !== null && current?.commissionAmount !== undefined) {
+        add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+      }
+      continue;
+    }
+
     if (
       row.auditItem === "New Hire" ||
       row.auditItem === "Transfer to Sales" ||
@@ -1465,6 +1477,9 @@ function buildVerificationExpectations(
 
     if (row.auditItem === "Missing Xactly Setup") {
       if (row.missingPeopleSetup === "Yes") addCoreEmployeeExpectations();
+      if (row.variableCompensationGap !== "" && current?.commissionAmount !== null && current?.commissionAmount !== undefined) {
+        add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+      }
       if (row.missingPositionSetup === "Yes") {
         add("positionRecord", "Position Record", "Present", "unverifiable", "Position cannot be verified from a People-only follow-up.");
       }
@@ -1497,7 +1512,10 @@ function buildVerificationExpectations(
           add("salary", "Salary", "", "unverifiable", "Salary cannot be derived when OTE or Commission Amount is blank.");
         }
       }
-      if (compareField("Commission Amount", previous.commissionAmount, current.commissionAmount).changed) {
+      if (
+        compareField("Commission Amount", previous.commissionAmount, current.commissionAmount).changed ||
+        row.variableCompensationGap !== ""
+      ) {
         if (current.commissionAmount !== null) add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
       }
       if (compareField("Business Unit", previous.businessUnit, current.businessUnit).changed) {
@@ -1521,10 +1539,16 @@ function buildVerificationExpectations(
 
     if (row.auditItem === "LOA Start") {
       add("employeeStatus", "Employee Status", "LOA", "text");
+      if (row.variableCompensationGap !== "" && current?.commissionAmount !== null && current?.commissionAmount !== undefined) {
+        add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+      }
       continue;
     }
     if (row.auditItem === "LOA Return") {
       add("employeeStatus", "Employee Status", "Active", "text");
+      if (row.variableCompensationGap !== "" && current?.commissionAmount !== null && current?.commissionAmount !== undefined) {
+        add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+      }
       continue;
     }
     if (row.auditItem === "Transfer to Non-Sales") {
@@ -1566,7 +1590,13 @@ function matchesExpectation(expectation: VerificationExpectation, actualValue: s
   if (expectation.rule === "number") {
     const expected = toNumber(expectation.expectedValue);
     const actual = toNumber(actualValue);
-    return expected !== null && actual !== null && numbersEqual(expected, actual);
+    return (
+      expected !== null &&
+      actual !== null &&
+      (expectation.fieldKey === "annualVariable"
+        ? Math.abs(expected - actual) < VARIABLE_COMPENSATION_MATERIALITY_THRESHOLD
+        : numbersEqual(expected, actual))
+    );
   }
   if (expectation.rule === "oneOf") {
     const actual = normalizeText(actualValue);
@@ -1913,6 +1943,8 @@ function createAuditRow(
     currentSupervisoryManager: "",
     previousCommissionAmount: "",
     currentCommissionAmount: "",
+    peopleAnnualVariable: "",
+    variableCompensationGap: "",
     previousBusinessUnit: "",
     currentBusinessUnit: "",
     previousCountry: "",
@@ -1929,6 +1961,77 @@ function createAuditRow(
     peopleUploadDate: context.peopleUploadDate,
     ...restValues,
   };
+}
+
+function appendVariableCompensationMismatches(
+  rows: AuditRow[],
+  processingMonth: string,
+  filters: Filters,
+  data: AppData,
+  countryToRegion: Record<string, string>,
+): void {
+  const nonActionItems = new Set(["OKR Plan End", "Unmapped Data Warning"]);
+  const existingChangeItems = new Set([
+    "Change to Existing Participant",
+    "Deferred Change While on LOA",
+    "LOA Return with Participant Changes",
+  ]);
+
+  for (const current of Object.values(data.currentScrById)) {
+    if (!isYes(current.activeStatus)) continue;
+    const people = data.peopleById[current.employeeId];
+    const gap = materialVariableCompensationGap(current.commissionAmount, people?.annualVariable ?? null);
+    if (gap === null || !people) continue;
+    const context = resolveEmployeeContext(current.employeeId, data, countryToRegion);
+    if (!matchesFilters(context, filters)) continue;
+
+    const summary = `SCR Commission Amount ${formatNumber(current.commissionAmount)} vs People Annual Variable ${formatNumber(people.annualVariable)} (Gap ${gap >= 0 ? "+" : ""}${formatNumber(gap)})`;
+    const candidates = rows.filter(
+      (row) => row.employeeId === current.employeeId && !nonActionItems.has(row.auditItem),
+    );
+    const existing = candidates.find((row) => existingChangeItems.has(row.auditItem)) ?? candidates[0];
+    if (existing) {
+      existing.currentCommissionAmount = numericCell(current.commissionAmount);
+      existing.peopleAnnualVariable = numericCell(people.annualVariable);
+      existing.variableCompensationGap = gap;
+      existing.changeSummary = combineSummaryParts(existing.changeSummary, summary);
+
+      const previous = data.previousScrById[current.employeeId];
+      const monthlyVariableChanged = Boolean(
+        previous && compareField("Commission Amount", previous.commissionAmount, current.commissionAmount).changed,
+      );
+      if (existingChangeItems.has(existing.auditItem) && !monthlyVariableChanged) {
+        const baseSubcategory = existing.auditSubcategory.replace(/ Only$/, "");
+        existing.auditSubcategory = baseSubcategory
+          ? `${baseSubcategory} + Variable Mismatch`
+          : "Variable Mismatch Only";
+      }
+      continue;
+    }
+
+    rows.push(
+      createAuditRow(
+        "Variable Compensation Mismatch",
+        processingMonth,
+        current.employeeId,
+        current.fullName || context.name,
+        context,
+        {
+          auditSubcategory: "Variable Mismatch Only",
+          currentCommissionAmount: numericCell(current.commissionAmount),
+          peopleAnnualVariable: numericCell(people.annualVariable),
+          variableCompensationGap: gap,
+          changeSummary: summary,
+        },
+      ),
+    );
+  }
+}
+
+function materialVariableCompensationGap(currentCommissionAmount: number | null, peopleAnnualVariable: number | null): number | null {
+  if (currentCommissionAmount === null || peopleAnnualVariable === null) return null;
+  const gap = currentCommissionAmount - peopleAnnualVariable;
+  return Math.abs(gap) >= VARIABLE_COMPENSATION_MATERIALITY_THRESHOLD ? gap : null;
 }
 
 function wcrValuesChanged(row: unknown[], currentColumn: number, proposedColumn: number): boolean {

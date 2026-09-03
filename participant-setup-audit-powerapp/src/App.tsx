@@ -71,6 +71,8 @@ const TABLE_COLUMNS: Array<{ key: keyof AuditRow; label: string }> = [
   { key: "currentSupervisoryManager", label: "Current Supervisory Manager" },
   { key: "previousCommissionAmount", label: "Previous Commission Amount" },
   { key: "currentCommissionAmount", label: "Current Commission Amount" },
+  { key: "peopleAnnualVariable", label: "People Annual Variable" },
+  { key: "variableCompensationGap", label: "Variable Compensation Gap" },
   { key: "previousBusinessUnit", label: "Previous Business Unit" },
   { key: "currentBusinessUnit", label: "Current Business Unit" },
   { key: "previousCountry", label: "Previous Country" },
@@ -706,6 +708,7 @@ function App() {
                 <li>Click Generate Report, review warnings, and validate the Audit Results.</li>
                 <li>Use Audit Subcategory to distinguish single-field changes, Promotions, Job Changes, and whether Variable Compensation also changed.</li>
                 <li>Compare Previous and Current Job Level (Grade) values from the two SCR files when reviewing career movements.</li>
+                <li>Review People Annual Variable and Variable Compensation Gap when the current SCR differs from People by 10 or more.</li>
                 <li>When multiple WCR rows describe the same event date, the date is shown once; distinct matching dates are separated by semicolons.</li>
                 <li>Download the Excel file for analyst action and later verification.</li>
               </ol>
@@ -770,7 +773,7 @@ function App() {
                 <li>In Audit Excel, a light yellow Analyst Name cell marks an inferred assignment.</li>
                 <li>For existing participants, a Country or derived LOB change shows the current Analyst beside the inferred Analyst recommendation.</li>
                 <li>Business Unit changes that remain within the same Country and derived LOB are marked No Routing Change.</li>
-                <li>Any Audit Subcategory containing Variable Change requires the Annual Variable update to be verified.</li>
+                <li>Variable Change describes a month-over-month SCR change; Variable Compensation Mismatch identifies a current SCR-to-People gap of 10 or more.</li>
                 <li>A higher Job Grade, or a same-grade IC-to-MR move, is classified as Promotion; other career movements are Job Change.</li>
                 <li>Job Level and Job Grade are not available in the People-only follow-up and therefore remain Not Verifiable.</li>
                 <li>WCR Effective Date is supporting context; a missing or ambiguous employee-level match remains blank after a valid WCR is uploaded.</li>
