@@ -1,4 +1,5 @@
 import XLSXImport from "xlsx-js-style";
+import { strFromU8, unzipSync } from "fflate";
 import { buildDashboardHtml, buildDashboardHtmlFileName } from "./dashboardHtml";
 import {
   buildAuditWorkbook,
@@ -633,21 +634,51 @@ if (
 ) {
   throw new Error("SCR-based Dashboard did not retain inferred Analyst ownership for commissioned employees.");
 }
-const inferredWorkbook = XLSX.read(
-  buildAuditWorkbook(inferredAudit.rows, {}, inferredAudit.expectations, inferenceData.currentScrById),
-  { type: "array", cellStyles: true },
+const inferredWorkbookBuffer = buildAuditWorkbook(
+  inferredAudit.rows,
+  {},
+  inferredAudit.expectations,
+  inferenceData.currentScrById,
 );
+const inferredWorkbook = XLSX.read(inferredWorkbookBuffer, { type: "array", cellStyles: true });
 const inferredReportSheet = inferredWorkbook.Sheets["Audit Report"];
 const inferredReportRows = XLSX.utils.sheet_to_json<string[]>(inferredReportSheet, { header: 1, defval: "" });
 const inferredHeaders = inferredReportRows[0] ?? [];
 const inferredRowIndex = inferredReportRows.findIndex(
-  (row) => String(row[inferredHeaders.indexOf("employeeId")]) === "000083",
+  (row) => String(row[inferredHeaders.indexOf("Employee ID")]) === "000083",
 );
 const inferredAnalystCell = inferredReportSheet[
-  XLSX.utils.encode_cell({ r: inferredRowIndex, c: inferredHeaders.indexOf("analystName") })
+  XLSX.utils.encode_cell({ r: inferredRowIndex, c: inferredHeaders.indexOf("Analyst") })
 ] as { s?: { patternType?: string; fgColor?: { rgb?: string } } } | undefined;
 if (inferredAnalystCell?.s?.patternType !== "solid" || inferredAnalystCell.s.fgColor?.rgb !== "FFF2CC") {
   throw new Error("Inferred Analyst Name cells are not highlighted light yellow in Audit Excel.");
+}
+const inferredColumnInfo = inferredReportSheet["!cols"] ?? [];
+if (
+  inferredHeaders.length !== 50 ||
+  inferredHeaders.slice(0, 10).join("|") !==
+    "Analyst|Employee ID|Employee name|Audit item|Audit subcategory|Change summary|WCR effective date|Country|LOB|Currently on LOA" ||
+  inferredColumnInfo.filter((column) => column?.hidden).length !== 34 ||
+  inferredColumnInfo[10]?.hidden ||
+  inferredColumnInfo.slice(11, 13).some((column) => !column?.hidden) ||
+  inferredColumnInfo.slice(14, 21).some((column) => !column?.hidden) ||
+  inferredColumnInfo.slice(22, 31).some((column) => !column?.hidden) ||
+  Math.max(...inferredColumnInfo.map((column) => column?.level ?? 0)) !== 2
+) {
+  throw new Error("Audit Excel did not retain the requested initial detail group state.");
+}
+const inferredSheetXml = strFromU8(unzipSync(new Uint8Array(inferredWorkbookBuffer))["xl/worksheets/sheet1.xml"]);
+if (!/pane[^>]*xSplit="3"[^>]*ySplit="1"[^>]*topLeftCell="D2"[^>]*state="frozen"/.test(inferredSheetXml)) {
+  throw new Error("Audit Excel did not freeze the header row and three identifying columns.");
+}
+if (/\slevel="/.test(inferredSheetXml) || !/\soutlineLevel="[12]"/.test(inferredSheetXml)) {
+  throw new Error("Audit Excel column groups were not serialized with valid OOXML outline attributes.");
+}
+for (const column of [11, 14, 22, 32, 39, 44]) {
+  const summaryColumn = inferredSheetXml.match(new RegExp(`<col[^>]*min="${column}"[^>]*/>`))?.[0] ?? "";
+  if (!/collapsed="1"/.test(summaryColumn) || /hidden="true"/.test(summaryColumn)) {
+    throw new Error(`Audit Excel detail group at column ${column} did not open collapsed with a visible summary column.`);
+  }
 }
 
 const filters = { regions: ["APAC"], lobs: ["LSS"], countries: ["Singapore"] };
@@ -786,10 +817,10 @@ const recommendationSheet = recommendationWorkbook.Sheets["Audit Report"];
 const recommendationRows = XLSX.utils.sheet_to_json<string[]>(recommendationSheet, { header: 1, defval: "" });
 const recommendationHeaders = recommendationRows[0] ?? [];
 const recommendationRowIndex = recommendationRows.findIndex(
-  (row) => String(row[recommendationHeaders.indexOf("employeeId")]) === "000120",
+  (row) => String(row[recommendationHeaders.indexOf("Employee ID")]) === "000120",
 );
 const recommendationCell = recommendationSheet[
-  XLSX.utils.encode_cell({ r: recommendationRowIndex, c: recommendationHeaders.indexOf("inferredAnalystName") })
+  XLSX.utils.encode_cell({ r: recommendationRowIndex, c: recommendationHeaders.indexOf("Inferred Analyst Name") })
 ] as { s?: { patternType?: string; fgColor?: { rgb?: string } } } | undefined;
 if (recommendationCell?.s?.patternType !== "solid" || recommendationCell.s.fgColor?.rgb !== "FFF2CC") {
   throw new Error("Inferred Analyst Name cells are not highlighted light yellow in Audit Excel.");
@@ -884,11 +915,11 @@ const changeWorkbookRows = XLSX.utils.sheet_to_json<Record<string, string>>(chan
   defval: "",
 });
 if (
-  changeWorkbookRows[0]?.wcrEffectiveDate !== "2026-07-10" ||
-  changeWorkbookRows[0]?.previousJobLevelGrade !== "IC3 (08.2)" ||
-  changeWorkbookRows[0]?.currentJobLevelGrade !== "IC4 (09.1)" ||
-  Number(changeWorkbookRows[0]?.peopleAnnualVariable) !== 50 ||
-  Number(changeWorkbookRows[0]?.variableCompensationGap) !== 25
+  changeWorkbookRows[0]?.["WCR effective date"] !== "2026-07-10" ||
+  changeWorkbookRows[0]?.["Previous Job Level Grade"] !== "IC3 (08.2)" ||
+  changeWorkbookRows[0]?.["Current Job Level Grade"] !== "IC4 (09.1)" ||
+  Number(changeWorkbookRows[0]?.["People Annual Variable"]) !== 50 ||
+  Number(changeWorkbookRows[0]?.["Variable Compensation Gap"]) !== 25
 ) {
   throw new Error("Audit Excel did not retain the career movement and Variable reconciliation values.");
 }

@@ -711,9 +711,10 @@ function App() {
                 <li>Review People Annual Variable and Variable Compensation Gap when the current SCR differs from People by 10 or more.</li>
                 <li>When multiple WCR rows describe the same event date, the date is shown once; distinct matching dates are separated by semicolons.</li>
                 <li>Download the Excel file for analyst action and later verification.</li>
+                <li>In Audit Report, use the worksheet outline controls to expand only the detail group needed for the current review.</li>
               </ol>
               <p className="instruction-note">
-                The workbook includes Audit Report, Column Guide, Summary, Verification Baseline, and SCR Population.
+                Audit Report opens with ten action columns visible. Column Guide explains the grouped fields and color cues.
               </p>
             </article>
 

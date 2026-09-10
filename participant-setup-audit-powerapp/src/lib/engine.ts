@@ -1,5 +1,6 @@
 import XLSXImport from "xlsx-js-style";
 import type { ColInfo, WorkBook, WorkSheet } from "xlsx-js-style";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { DEFAULT_COUNTRY_REGION_MAP } from "./countryRegionMap";
 import type {
   AppData,
@@ -91,6 +92,100 @@ const AUDIT_COLUMN_DESCRIPTIONS: Record<keyof AuditRow, string> = {
   transferDirection: "Detected direction of the employee's sales-role transfer.",
   microsoftTransfer: "Indicates whether the employee appears in the Transfer to MSFT file.",
   peopleUploadDate: "Upload date of the People record used in the audit.",
+};
+
+const AUDIT_COLUMN_GROUPS: ReadonlyArray<{
+  label: string;
+  columns: ReadonlyArray<keyof AuditRow>;
+}> = [
+  {
+    label: "Review essentials",
+    columns: [
+      "analystName",
+      "employeeId",
+      "employeeName",
+      "auditItem",
+      "auditSubcategory",
+      "changeSummary",
+      "wcrEffectiveDate",
+      "country",
+      "lob",
+      "currentOnLeave",
+    ],
+  },
+  { label: "Analyst routing", columns: ["analystReview", "inferredAnalystName", "inferenceBasis"] },
+  {
+    label: "Setup and lifecycle",
+    columns: [
+      "planType",
+      "hireDate",
+      "terminationDate",
+      "rehireInPeople",
+      "missingPeopleSetup",
+      "missingPositionSetup",
+      "transferDirection",
+      "microsoftTransfer",
+    ],
+  },
+  {
+    label: "Role and organization",
+    columns: [
+      "previousJobTitle",
+      "currentJobTitle",
+      "previousJobLevelGrade",
+      "currentJobLevelGrade",
+      "previousSupervisoryManager",
+      "currentSupervisoryManager",
+      "previousBusinessUnit",
+      "currentBusinessUnit",
+      "previousCountry",
+      "currentCountry",
+    ],
+  },
+  {
+    label: "Compensation",
+    columns: [
+      "variableCompensationGap",
+      "previousCommissionAmount",
+      "currentCommissionAmount",
+      "peopleAnnualVariable",
+      "previousCurrency",
+      "currentCurrency",
+      "negativeBalance",
+    ],
+  },
+  {
+    label: "LOA and OKR",
+    columns: ["loaFirstDayOfLeave", "loaEstimatedLastDay", "loaTotalDays", "okrStartMonth", "okrEndMonth"],
+  },
+  {
+    label: "Source context",
+    columns: [
+      "processingMonth",
+      "region",
+      "currentActiveStatus",
+      "currentFirstDayOfLeave",
+      "peoplePlanEffectiveDate",
+      "peopleBusinessUnit",
+      "peopleUploadDate",
+    ],
+  },
+];
+
+const AUDIT_COLUMNS = AUDIT_COLUMN_GROUPS.flatMap((group) =>
+  group.columns.map((key) => ({ key, group: group.label })),
+);
+
+const AUDIT_COLUMN_LABEL_OVERRIDES: Partial<Record<keyof AuditRow, string>> = {
+  analystName: "Analyst",
+  employeeId: "Employee ID",
+  employeeName: "Employee name",
+  auditItem: "Audit item",
+  auditSubcategory: "Audit subcategory",
+  changeSummary: "Change summary",
+  wcrEffectiveDate: "WCR effective date",
+  lob: "LOB",
+  currentOnLeave: "Currently on LOA",
 };
 
 const VERIFICATION_COLUMN_DESCRIPTIONS: Record<keyof VerificationResultRow, string> = {
@@ -952,41 +1047,20 @@ export function buildAuditWorkbook(
   currentScrById: Record<string, ScrRecord> = {},
 ): ArrayBuffer {
   const wb = XLSX.utils.book_new();
-  const reportRows = rows.map((row) => ({ ...row }));
-  const reportSheet = XLSX.utils.json_to_sheet(reportRows);
-  applyHeaderStyle(reportSheet);
-  if (reportRows.length > 0) {
-    const analystColumn = Object.keys(reportRows[0]).indexOf("analystName");
-    const inferredAnalystColumn = Object.keys(reportRows[0]).indexOf("inferredAnalystName");
-    const inferredVerificationIds = new Set(
-      expectations
-        .filter((expectation) => expectation.analystSource.startsWith("Inferred:"))
-        .map((expectation) => expectation.verificationId),
-    );
-    if (analystColumn >= 0) {
-      reportRows.forEach((row, rowIndex) => {
-        const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
-        if (!inferredVerificationIds.has(verificationId)) return;
-        const cell = reportSheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: analystColumn })];
-        if (cell) cell.s = { ...(cell.s ?? {}), fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } } };
-      });
-    }
-    if (inferredAnalystColumn >= 0) {
-      reportRows.forEach((row, rowIndex) => {
-        if (!row.inferredAnalystName) return;
-        const cell = reportSheet[XLSX.utils.encode_cell({ r: rowIndex + 1, c: inferredAnalystColumn })];
-        if (cell) cell.s = { ...(cell.s ?? {}), fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } } };
-      });
-    }
-  }
+  const reportSheet = XLSX.utils.aoa_to_sheet([
+    AUDIT_COLUMNS.map(({ key }) => formatAuditColumnLabel(key)),
+    ...rows.map((row) => AUDIT_COLUMNS.map(({ key }) => row[key])),
+  ]);
+  styleAuditReport(reportSheet, rows, expectations);
   reportSheet["!autofilter"] = {
     ref: XLSX.utils.encode_range(
       reportSheet["!ref"] ? XLSX.utils.decode_range(reportSheet["!ref"]) : { s: { c: 0, r: 0 }, e: { c: 0, r: 0 } },
     ),
   };
-  reportSheet["!cols"] = buildColumnWidths(reportRows);
+  reportSheet["!cols"] = buildAuditColumnWidths();
+  (reportSheet as WorkSheet & { "!outline"?: { left?: boolean } })["!outline"] = { left: true };
   XLSX.utils.book_append_sheet(wb, reportSheet, "Audit Report");
-  appendColumnGuide(wb, AUDIT_COLUMN_DESCRIPTIONS);
+  appendAuditColumnGuide(wb);
 
   const summaryRows = [
     ...Object.entries(fileNames).map(([key, value]) => ({ Section: "Uploaded File", Name: key, Value: value })),
@@ -1032,7 +1106,7 @@ export function buildAuditWorkbook(
   populationSheet["!cols"] = buildColumnWidths(populationRows);
   XLSX.utils.book_append_sheet(wb, populationSheet, "SCR Population");
 
-  return XLSX.write(wb, { bookType: "xlsx", type: "array", cellStyles: true });
+  return addAuditWorkbookView(XLSX.write(wb, { bookType: "xlsx", type: "array", cellStyles: true }));
 }
 
 export function buildDownloadFileName(now = new Date()): string {
@@ -1849,6 +1923,237 @@ function applyHeaderStyle(sheet: WorkSheet): void {
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
     };
   }
+}
+
+function formatAuditColumnLabel(key: keyof AuditRow): string {
+  return (
+    AUDIT_COLUMN_LABEL_OVERRIDES[key] ??
+    key
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/\b(Id|Loa|Okr|Scr|Wcr|Msft)\b/gi, (word) => word.toUpperCase())
+      .replace(/^./, (letter) => letter.toUpperCase())
+  );
+}
+
+function buildAuditColumnWidths(): ColInfo[] {
+  const widths: Partial<Record<keyof AuditRow, number>> = {
+    analystName: 20,
+    employeeId: 13,
+    employeeName: 22,
+    auditItem: 29,
+    auditSubcategory: 28,
+    changeSummary: 52,
+    wcrEffectiveDate: 18,
+    country: 20,
+    lob: 11,
+    currentOnLeave: 15,
+    inferenceBasis: 42,
+    planType: 35,
+  };
+  const groupStarts = new Set<number>();
+  let columnIndex = 0;
+  for (const group of AUDIT_COLUMN_GROUPS) {
+    if (columnIndex > 0) groupStarts.add(columnIndex);
+    columnIndex += group.columns.length;
+  }
+  const coreColumnCount = AUDIT_COLUMN_GROUPS[0].columns.length;
+  return AUDIT_COLUMNS.map(({ key }, index) => ({
+    wch: widths[key] ?? (key.includes("Manager") ? 28 : 21),
+    ...(index >= coreColumnCount
+      ? {
+          level: groupStarts.has(index) ? 1 : 2,
+          ...(!groupStarts.has(index) ? { hidden: true } : {}),
+        }
+      : {}),
+  }));
+}
+
+function styleAuditReport(
+  sheet: WorkSheet,
+  rows: AuditRow[],
+  expectations: VerificationExpectation[],
+): void {
+  const indexByKey = new Map(AUDIT_COLUMNS.map(({ key }, index) => [key, index]));
+  const address = (row: number, key: keyof AuditRow) =>
+    XLSX.utils.encode_cell({ r: row, c: indexByKey.get(key) ?? 0 });
+  const setStyle = (cellAddress: string, style: Record<string, unknown>) => {
+    const cell = sheet[cellAddress];
+    if (!cell) return;
+    const current = typeof cell.s === "object" && cell.s ? cell.s : {};
+    cell.s = {
+      ...current,
+      ...style,
+      ...(style.font ? { font: { ...(current.font ?? {}), ...(style.font as object) } } : {}),
+      ...(style.alignment ? { alignment: { ...(current.alignment ?? {}), ...(style.alignment as object) } } : {}),
+      ...(style.border ? { border: { ...(current.border ?? {}), ...(style.border as object) } } : {}),
+    };
+  };
+  const headerStyle = {
+    font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+    fill: { patternType: "solid", fgColor: { rgb: "173A5E" } },
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    border: {
+      right: { style: "thin", color: { rgb: "FFFFFF" } },
+      bottom: { style: "medium", color: { rgb: "173A5E" } },
+    },
+  };
+  AUDIT_COLUMNS.forEach((_, index) => setStyle(XLSX.utils.encode_cell({ r: 0, c: index }), headerStyle));
+
+  const inferredVerificationIds = new Set(
+    expectations
+      .filter((expectation) => expectation.analystSource.startsWith("Inferred:"))
+      .map((expectation) => expectation.verificationId),
+  );
+  const comparePairs: ReadonlyArray<readonly [keyof AuditRow, keyof AuditRow]> = [
+    ["previousJobTitle", "currentJobTitle"],
+    ["previousJobLevelGrade", "currentJobLevelGrade"],
+    ["previousSupervisoryManager", "currentSupervisoryManager"],
+    ["previousBusinessUnit", "currentBusinessUnit"],
+    ["previousCountry", "currentCountry"],
+    ["previousCurrency", "currentCurrency"],
+    ["previousCommissionAmount", "currentCommissionAmount"],
+  ];
+  const amountKeys: ReadonlyArray<keyof AuditRow> = [
+    "previousCommissionAmount",
+    "currentCommissionAmount",
+    "peopleAnnualVariable",
+    "variableCompensationGap",
+    "negativeBalance",
+  ];
+  sheet["!rows"] = [{ hpt: 36 }, ...rows.map((row) => ({ hpt: row.changeSummary.length > 90 ? 36 : 21 }))];
+
+  rows.forEach((row, rowIndex) => {
+    const sheetRow = rowIndex + 1;
+    for (let column = 0; column < 10; column += 1) {
+      setStyle(XLSX.utils.encode_cell({ r: sheetRow, c: column }), {
+        font: { name: "Arial", sz: 10, color: { rgb: "263746" } },
+        alignment: { vertical: "center" },
+        border: { bottom: { style: "thin", color: { rgb: "E6EBF0" } } },
+      });
+    }
+    setStyle(address(sheetRow, "changeSummary"), { alignment: { vertical: "top", wrapText: true } });
+    const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
+    if (inferredVerificationIds.has(verificationId)) {
+      setStyle(address(sheetRow, "analystName"), {
+        fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } },
+      });
+    }
+    if (row.inferredAnalystName) {
+      setStyle(address(sheetRow, "inferredAnalystName"), {
+        fill: { patternType: "solid", fgColor: { rgb: "FFF2CC" } },
+      });
+    }
+    if (row.currentOnLeave === "Yes") {
+      setStyle(address(sheetRow, "currentOnLeave"), {
+        fill: { patternType: "solid", fgColor: { rgb: "EEE8F5" } },
+        font: { bold: true, color: { rgb: "654A78" } },
+      });
+    }
+    if (row.variableCompensationGap !== "" && Number(row.variableCompensationGap) !== 0) {
+      setStyle(address(sheetRow, "variableCompensationGap"), {
+        fill: { patternType: "solid", fgColor: { rgb: "FCE8E6" } },
+        font: { bold: true, color: { rgb: "A61B1B" } },
+      });
+      setStyle(address(sheetRow, "changeSummary"), { font: { bold: true, color: { rgb: "A61B1B" } } });
+    }
+    for (const [previousKey, currentKey] of comparePairs) {
+      const previousValue = row[previousKey];
+      const currentValue = row[currentKey];
+      if (previousValue !== "" && currentValue !== "" && previousValue !== currentValue) {
+        setStyle(address(sheetRow, currentKey), {
+          fill: { patternType: "solid", fgColor: { rgb: "DDEBF7" } },
+        });
+      }
+    }
+    for (const key of amountKeys) setStyle(address(sheetRow, key), { numFmt: "#,##0.00;[Red](#,##0.00);0.00" });
+  });
+}
+
+function appendAuditColumnGuide(wb: WorkBook): void {
+  const rows = AUDIT_COLUMNS.map(({ key, group }, index) => ({
+    "Excel Column": XLSX.utils.encode_col(index),
+    Group: group,
+    Column: formatAuditColumnLabel(key),
+    "Field Key": key,
+    Description: AUDIT_COLUMN_DESCRIPTIONS[key],
+  }));
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.sheet_add_aoa(
+    sheet,
+    [
+      ["How to use", "Action"],
+      ["Start", "Filter Analyst, then Audit item or Audit subcategory."],
+      ["Show detail", "Use outline buttons 1, 2 and 3 above the column letters, or expand an individual group with +."],
+      ["Compare", "Blue marks a populated current value that differs from the previous value."],
+      ["Exceptions", "Red marks a compensation gap. Purple marks current LOA. Yellow marks an inferred analyst."],
+      ["All fields", "All 50 original fields remain in Audit Report."],
+    ],
+    { origin: "G1" },
+  );
+  for (const range of ["A1:E1", "G1:H1"]) {
+    const decoded = XLSX.utils.decode_range(range);
+    for (let column = decoded.s.c; column <= decoded.e.c; column += 1) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: 0, c: column })];
+      if (!cell) continue;
+      cell.s = {
+        font: { name: "Arial", sz: 10, bold: true, color: { rgb: "FFFFFF" } },
+        fill: { patternType: "solid", fgColor: { rgb: "173A5E" } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      };
+    }
+  }
+  for (let row = 1; row <= rows.length; row += 1) {
+    const descriptionCell = sheet[XLSX.utils.encode_cell({ r: row, c: 4 })];
+    if (descriptionCell) descriptionCell.s = { alignment: { vertical: "center", wrapText: true } };
+  }
+  for (let row = 1; row <= 5; row += 1) {
+    const labelCell = sheet[XLSX.utils.encode_cell({ r: row, c: 6 })];
+    const actionCell = sheet[XLSX.utils.encode_cell({ r: row, c: 7 })];
+    if (labelCell) labelCell.s = { font: { name: "Arial", sz: 10, bold: true, color: { rgb: "36536C" } } };
+    if (actionCell) actionCell.s = { alignment: { vertical: "center", wrapText: true } };
+  }
+  sheet["!cols"] = [
+    { wch: 14 }, { wch: 24 }, { wch: 28 }, { wch: 30 }, { wch: 70 }, { wch: 3 }, { wch: 18 }, { wch: 62 },
+  ];
+  sheet["!rows"] = [{ hpt: 28 }, ...Array.from({ length: rows.length }, (_, index) => ({ hpt: index < 5 ? 38 : 32 }))];
+  XLSX.utils.book_append_sheet(wb, sheet, "Column Guide");
+}
+
+function addAuditWorkbookView(workbook: ArrayBuffer): ArrayBuffer {
+  const archive = unzipSync(new Uint8Array(workbook));
+  const sheetPath = "xl/worksheets/sheet1.xml";
+  const sheetBytes = archive[sheetPath];
+  if (!sheetBytes) throw new Error("Audit Report worksheet XML was not generated.");
+  let xml = strFromU8(sheetBytes);
+  const prefix = xml.match(/<([A-Za-z0-9_]+:)?worksheet\b/)?.[1] ?? "";
+  const view = `<${prefix}sheetViews><${prefix}sheetView workbookViewId="0" showGridLines="0" showOutlineSymbols="1" zoomScale="90" zoomScaleNormal="90"><${prefix}pane xSplit="3" ySplit="1" topLeftCell="D2" activePane="bottomRight" state="frozen"/><${prefix}selection pane="bottomRight" activeCell="D2" sqref="D2"/></${prefix}sheetView></${prefix}sheetViews>`;
+  const existingView = new RegExp(`<${prefix}sheetViews>[\\s\\S]*?<\\/${prefix}sheetViews>`);
+  if (existingView.test(xml)) {
+    xml = xml.replace(existingView, view);
+  } else {
+    const dimension = new RegExp(`(<${prefix}dimension[^>]*/>)`);
+    if (!dimension.test(xml)) throw new Error("Audit Report worksheet dimension was not generated.");
+    xml = xml.replace(dimension, `$1${view}`);
+  }
+  xml = xml.replace(/\slevel="[^"]*"/g, "");
+  const collapsedGroupStarts = new Set<number>();
+  let groupStart = AUDIT_COLUMN_GROUPS[0].columns.length;
+  for (let groupIndex = 1; groupIndex < AUDIT_COLUMN_GROUPS.length; groupIndex += 1) {
+    collapsedGroupStarts.add(groupStart + 1);
+    groupStart += AUDIT_COLUMN_GROUPS[groupIndex].columns.length;
+  }
+  xml = xml.replace(/<(?:[A-Za-z0-9_]+:)?col\b[^>]*\/>/g, (columnXml) => {
+    const minimum = Number(columnXml.match(/\bmin="(\d+)"/)?.[1]);
+    if (!collapsedGroupStarts.has(minimum) || /\bcollapsed=/.test(columnXml)) return columnXml;
+    return columnXml.replace(/\/>$/, ' collapsed="1"/>');
+  });
+  const sheetFormat = new RegExp(`(<${prefix}sheetFormatPr\\b)([^>]*?)(/>)`);
+  xml = xml.replace(sheetFormat, (_match, start: string, attributes: string, end: string) =>
+    attributes.includes("outlineLevelCol=") ? `${start}${attributes}${end}` : `${start}${attributes} outlineLevelCol="2"${end}`,
+  );
+  archive[sheetPath] = strToU8(xml);
+  const output = zipSync(archive, { level: 6 });
+  return output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer;
 }
 
 function appendColumnGuide(wb: WorkBook, descriptions: Readonly<Record<string, string>>): void {
