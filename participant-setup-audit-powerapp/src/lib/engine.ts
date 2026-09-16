@@ -550,7 +550,7 @@ export async function parseScrFile(file: File): Promise<FileParseResult<Record<s
     jobGrade: findExactColumn(header, ["cflrvglobaljobgrade"], ["globaljobgrade"]),
     supervisoryManager: findColumn(header, ["supervisorymanager"]),
     oteBaseComm: findColumn(header, ["otebasecomm"]),
-    commissionAmount: findColumn(header, ["commissionamount"]),
+    commissionAmount: findColumn(header, ["commissionbrazil12months"]),
     costCenter: findExactColumn(header, ["costcenter"], ["costcenter"]),
     jobFamily: findExactColumn(header, ["jobfamily"], ["jobfamily"]),
     businessUnit: findExactColumn(header, ["businessunit"], ["businessunit"]),

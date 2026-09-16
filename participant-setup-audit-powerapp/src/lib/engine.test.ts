@@ -181,8 +181,8 @@ const parsedScr = await parseScrFile(
   new File(
     [
       [
-        "Employee ID,Active Status,Hire Date,Business Unit,Country,Job Family Group,Job Family,Cost Center - ID,Cost Center,CF-CB-Career Band/Level - Worker,CF LRV Global Job grade",
-        "000100,Yes,2020-01-01,Other,Singapore,Wrong Group,Sales Development Representative,12345,NAMER GCP Enterprise,MR2,09.1",
+        "Employee ID,Active Status,Hire Date,Business Unit,Country,Job Family Group,Job Family,Cost Center - ID,Cost Center,CF-CB-Career Band/Level - Worker,CF LRV Global Job grade,Commission Amount,Commission (Brazil - 12 months)",
+        "000100,Yes,2020-01-01,Other,Singapore,Wrong Group,Sales Development Representative,12345,NAMER GCP Enterprise,MR2,09.1,10,20",
       ].join("\n"),
     ],
     "scr.csv",
@@ -193,9 +193,10 @@ if (
   parsedScr.data["000100"]?.jobFamily !== "Sales Development Representative" ||
   parsedScr.data["000100"]?.costCenter !== "NAMER GCP Enterprise" ||
   parsedScr.data["000100"]?.jobLevel !== "MR2" ||
-  parsedScr.data["000100"]?.jobGrade !== "09.1"
+  parsedScr.data["000100"]?.jobGrade !== "09.1" ||
+  parsedScr.data["000100"]?.commissionAmount !== 20
 ) {
-  throw new Error("SCR parser did not select the exact Job Family, Cost Center, Job Level, and Job Grade columns.");
+  throw new Error("SCR parser did not select the required exact-purpose columns.");
 }
 
 const workerChangeMatrix = [
