@@ -558,7 +558,18 @@ for (const [lob, expected] of Object.entries(expectedLobCounts)) {
 }
 
 const inferenceData = createEmptyAppData();
-const secondPeople = { ...people, employeeId: "000082", fullName: "Second Employee" };
+const secondPeople = {
+  ...people,
+  employeeId: "000082",
+  fullName: "Second Employee",
+  analystName: "Manager Analyst",
+};
+const managerPeople = {
+  ...people,
+  employeeId: "123456",
+  fullName: "Manager",
+  analystName: "Manager Analyst",
+};
 const historicalNewHirePeople = {
   ...people,
   employeeId: "000083",
@@ -568,6 +579,7 @@ const historicalNewHirePeople = {
 inferenceData.peopleById = {
   [people.employeeId]: people,
   [secondPeople.employeeId]: secondPeople,
+  [managerPeople.employeeId]: managerPeople,
   [historicalNewHirePeople.employeeId]: historicalNewHirePeople,
 };
 inferenceData.currentScrById = {
@@ -604,22 +616,25 @@ const inferredAudit = buildAuditReport(
 const inferredExpectation = inferredAudit.expectations.find((item) => item.employeeId === "000083");
 const inferredAuditRow = inferredAudit.rows.find((item) => item.employeeId === "000083");
 if (
-  inferredAuditRow?.analystName !== people.analystName ||
+  inferredAuditRow?.analystName !== managerPeople.analystName ||
+  inferredAuditRow.inferenceBasis !== "Country + LOB + Manager | Manager match | n=2" ||
   inferredAuditRow.previousJobLevelGrade !== "" ||
   inferredAuditRow.currentJobLevelGrade !== "IC3 (08.2)" ||
-  inferredExpectation?.analystName !== people.analystName ||
-  inferredExpectation.analystSource !== "Inferred: Country + LOB" ||
-  inferredExpectation.analystConfidence !== "100%" ||
+  inferredExpectation?.analystName !== managerPeople.analystName ||
+  inferredExpectation.analystSource !== "Inferred: Country + LOB + Manager" ||
+  inferredExpectation.analystConfidence !== "Manager match" ||
   inferredExpectation.analystSampleSize !== 2
 ) {
-  throw new Error("New Hire analyst inference did not replace the historical assignment with the expected unique leader.");
+  throw new Error("New Hire analyst inference did not prefer the manager's Analyst from multiple candidates.");
 }
 const regionalExpectation = inferredAudit.expectations.find((item) => item.employeeId === "000084");
+const regionalAuditRow = inferredAudit.rows.find((item) => item.employeeId === "000084");
 if (
-  regionalExpectation?.analystName !== people.analystName ||
-  regionalExpectation.analystSource !== "Inferred: Region + LOB"
+  regionalAuditRow?.inferenceBasis !== "Region + LOB + Manager | Manager match | n=2" ||
+  regionalExpectation?.analystName !== managerPeople.analystName ||
+  regionalExpectation.analystSource !== "Inferred: Region + LOB + Manager"
 ) {
-  throw new Error("Region + LOB analyst fallback did not select the expected unique leader.");
+  throw new Error("Region + LOB analyst fallback did not prefer the manager's Analyst from multiple candidates.");
 }
 const inferenceDashboard = buildDashboardModel(
   inferenceData.currentScrById,
@@ -630,7 +645,8 @@ const inferenceDashboard = buildDashboardModel(
 );
 if (
   inferenceDashboard.commissionedEmployees !== 4 ||
-  inferenceDashboard.byAnalyst.find((row) => row.label === people.analystName)?.employees !== 4 ||
+  inferenceDashboard.byAnalyst.find((row) => row.label === managerPeople.analystName)?.employees !== 3 ||
+  inferenceDashboard.byAnalyst.find((row) => row.label === people.analystName)?.employees !== 1 ||
   inferenceDashboard.byAnalyst.some((row) => row.label === historicalNewHirePeople.analystName && row.employees > 0)
 ) {
   throw new Error("SCR-based Dashboard did not retain inferred Analyst ownership for commissioned employees.");
@@ -732,6 +748,15 @@ const recommendationRecords = [
     currentBusinessUnit: "Sales Solutions",
     analystName: "Australia Analyst",
   },
+  {
+    employeeId: "000125",
+    name: "Australia Manager Peer",
+    previousCountry: "Australia",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Manager Analyst",
+  },
 ];
 for (const record of recommendationRecords) {
   const previous = {
@@ -760,6 +785,12 @@ for (const record of recommendationRecords) {
     effectiveStartDate: new Date(2020, 0, 1),
   };
 }
+recommendationData.peopleById["123456"] = {
+  ...people,
+  employeeId: "123456",
+  fullName: "Manager",
+  analystName: "Manager Analyst",
+};
 const recommendationRegionMap = { australia: "APAC", germany: "EMEA", singapore: "APAC" };
 const recommendationAudit = buildAuditReport(
   "JUL-2026",
@@ -771,11 +802,11 @@ const recommendationAudit = buildAuditReport(
 const countryChangeRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000120");
 if (
   countryChangeRecommendation?.analystName !== "Current Analyst" ||
-  countryChangeRecommendation.inferredAnalystName !== "Australia Analyst" ||
+  countryChangeRecommendation.inferredAnalystName !== "Manager Analyst" ||
   countryChangeRecommendation.analystReview !== "Change Suggested" ||
-  countryChangeRecommendation.inferenceBasis !== "Country + LOB | 100% | n=2"
+  countryChangeRecommendation.inferenceBasis !== "Country + LOB + Manager | Manager match | n=3"
 ) {
-  throw new Error("Country change did not preserve the current Analyst and produce the expected Analyst recommendation.");
+  throw new Error("Country change did not prefer the manager's Analyst from multiple candidates.");
 }
 const sameLobRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000121");
 if (
@@ -799,9 +830,9 @@ const recommendationVerification = buildFollowUpVerification(
 );
 const countryChangeVerification = recommendationVerification.rows.find((row) => row.employeeId === "000120");
 if (
-  countryChangeVerification?.inferredAnalystName !== "Australia Analyst" ||
+  countryChangeVerification?.inferredAnalystName !== "Manager Analyst" ||
   countryChangeVerification.analystReview !== "Change Suggested" ||
-  countryChangeVerification.inferenceBasis !== "Country + LOB | 100% | n=2"
+  countryChangeVerification.inferenceBasis !== "Country + LOB + Manager | Manager match | n=3"
 ) {
   throw new Error("Verification did not retain the initial Analyst recommendation.");
 }

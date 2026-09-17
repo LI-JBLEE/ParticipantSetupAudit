@@ -782,10 +782,12 @@ export function buildAuditReport(
       countryToRegion,
       analystInferenceIndex,
       true,
+      true,
     );
     rows.push(
       createAuditRow("New Hire", processingMonth, current.employeeId, current.fullName || context.name, context, {
         analystName: analystAssignment.name,
+        inferenceBasis: formatAnalystInferenceBasis(analystAssignment),
         hireDate: formatDate(current.hireDate),
         currentJobTitle: current.jobTitle,
         currentBusinessUnit: current.businessUnit,
@@ -1389,6 +1391,9 @@ export function buildDashboardModel(
   const inferredOwnershipIds = new Set(
     verificationRows.filter((row) => isInferredOwnershipAuditItem(row.auditItem)).map((row) => row.employeeId),
   );
+  const newHireIds = new Set(
+    verificationRows.filter((row) => row.auditItem === "New Hire").map((row) => row.employeeId),
+  );
   const analystIndex = buildAnalystInferenceIndex(analystData, countryToRegion, inferredOwnershipIds);
   const commissioned = Object.values(currentScrById)
     .filter((current) => isYes(current.activeStatus))
@@ -1401,6 +1406,7 @@ export function buildDashboardModel(
         countryToRegion,
         analystIndex,
         inferredOwnershipIds.has(current.employeeId),
+        newHireIds.has(current.employeeId),
       ).name,
     }));
   const regionOptions = sortDisplayValues(new Set(commissioned.map((person) => person.region)));
@@ -1466,6 +1472,7 @@ function buildVerificationExpectations(
       countryToRegion,
       analystIndex,
       isInferredOwnershipAuditItem(row.auditItem),
+      row.auditItem === "New Hire",
     );
     const verificationId = `${row.processingMonth}|${row.auditItem}|${row.employeeId}`;
     const deferred = row.auditItem === "Deferred Change While on LOA" ? "Yes" : "No";
@@ -1737,7 +1744,7 @@ function deriveExistingAnalystRecommendation(
     };
   }
 
-  const inferred = resolveAnalystAssignment(employeeId, data, countryToRegion, index, true);
+  const inferred = resolveAnalystAssignment(employeeId, data, countryToRegion, index, true, true);
   if (inferred.name === "Unassigned") {
     return {
       inferredAnalystName: "Unassigned",
@@ -1749,7 +1756,7 @@ function deriveExistingAnalystRecommendation(
     inferredAnalystName: inferred.name,
     analystReview:
       normalizeText(people?.analystName) === normalizeText(inferred.name) ? "No Change Suggested" : "Change Suggested",
-    inferenceBasis: `${inferred.source.replace(/^Inferred:\s*/, "")} | ${inferred.confidence} | n=${inferred.sampleSize}`,
+    inferenceBasis: formatAnalystInferenceBasis(inferred),
   };
 }
 
@@ -1780,6 +1787,7 @@ function resolveAnalystAssignment(
   countryToRegion: Record<string, string>,
   index: AnalystInferenceIndex,
   ignorePeopleAnalyst = false,
+  preferManagerAnalyst = false,
 ): AnalystAssignment {
   const people = data.peopleById[employeeId];
   if (!ignorePeopleAnalyst && people?.analystName.trim()) {
@@ -1795,12 +1803,18 @@ function resolveAnalystAssignment(
     return { name: "Unassigned", source: "Unassigned", confidence: "", sampleSize: 0 };
   }
 
-  const countryMatch = chooseAnalyst(index.countryLob.get(analystKey(country, lob)), "Inferred: Country + LOB");
+  const managerId = preferManagerAnalyst ? normalizeEmployeeIdFromText(scr?.supervisoryManager) : null;
+  const managerAnalyst = managerId ? data.peopleById[managerId]?.analystName.trim() : "";
+  const countryMatch = chooseAnalyst(
+    index.countryLob.get(analystKey(country, lob)),
+    "Inferred: Country + LOB",
+    managerAnalyst,
+  );
   if (countryMatch) return countryMatch;
 
   const region = normalizeRegionValue(countryToRegion[country] ?? people?.region ?? "");
   const regionMatch = region
-    ? chooseAnalyst(index.regionLob.get(analystKey(region, lob)), "Inferred: Region + LOB")
+    ? chooseAnalyst(index.regionLob.get(analystKey(region, lob)), "Inferred: Region + LOB", managerAnalyst)
     : null;
   return regionMatch ?? { name: "Unassigned", source: "Unassigned", confidence: "", sampleSize: 0 };
 }
@@ -1814,8 +1828,24 @@ function addAnalystCount(index: Map<string, AnalystCountMap>, key: string, analy
   counts.set(analyst, (counts.get(analyst) ?? 0) + 1);
 }
 
-function chooseAnalyst(counts: AnalystCountMap | undefined, source: string): AnalystAssignment | null {
+function chooseAnalyst(
+  counts: AnalystCountMap | undefined,
+  source: string,
+  managerAnalyst = "",
+): AnalystAssignment | null {
   if (!counts || counts.size === 0) return null;
+  const managerCandidate =
+    counts.size > 1 && managerAnalyst
+      ? [...counts.keys()].find((analyst) => normalizeText(analyst) === normalizeText(managerAnalyst))
+      : undefined;
+  if (managerCandidate) {
+    return {
+      name: managerCandidate,
+      source: `${source} + Manager`,
+      confidence: "Manager match",
+      sampleSize: [...counts.values()].reduce((total, count) => total + count, 0),
+    };
+  }
   const ranked = [...counts.entries()].sort((left, right) => {
     const countCompare = right[1] - left[1];
     return countCompare !== 0 ? countCompare : left[0].localeCompare(right[0]);
@@ -1829,6 +1859,11 @@ function chooseAnalyst(counts: AnalystCountMap | undefined, source: string): Ana
     confidence: `${Math.round((top[1] / sampleSize) * 100)}%`,
     sampleSize,
   };
+}
+
+function formatAnalystInferenceBasis(assignment: AnalystAssignment): string {
+  if (assignment.name === "Unassigned") return "No unique Country + LOB or Region + LOB match";
+  return `${assignment.source.replace(/^Inferred:\s*/, "")} | ${assignment.confidence} | n=${assignment.sampleSize}`;
 }
 
 function analystKey(first: string, lob: string): string {
