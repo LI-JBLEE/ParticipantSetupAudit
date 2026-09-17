@@ -1,12 +1,16 @@
 # Participant Setup Audit - App Handoff
 
-Last updated: 2026-04-27
+Last updated: 2026-08-26
 
-Latest committed app change commit: `939510`
+Current Power Apps deployment: Git commit `1b92e4a`, deployed on 2026-08-26
+
+Current pre-SharePoint deployment: seven-day People verification, SCR-based manager dashboard, PDF/interactive HTML export, Audit Subcategory propagation, inferred analyst ownership, and CSV Quota Assignment support.
+
+App UI version: `1.2`
 
 ## 1. App purpose
 
-This app generates a `Participant Setup Audit` report entirely in the browser.
+This app generates a `Participant Setup Audit` report, verifies later Xactly People updates, and provides a manager dashboard entirely in the browser.
 
 Primary goals:
 
@@ -64,13 +68,14 @@ Key files:
 3. Parsed data is stored in React state.
 4. Audit rules run in the browser.
 5. Results are shown on screen and can be exported to Excel.
+6. The deployed app currently has no SharePoint source-file archive connection; all source processing remains client-side.
 
 There is no backend and no server-side data processing.
 
 ## 5. Power Apps wrapper notes
 
-- The app is Power Apps wrapper-ready but currently runs as a normal Vite app.
-- [power.config.json](/c:/Codex/PowerApps/Participant%20Setup%20Audit/participant-setup-audit-powerapp/power.config.json) still uses a placeholder `appId`.
+- The app is deployed as a Power Apps code app and can also run locally through Vite.
+- [power.config.json](/c:/Codex/PowerApps/Participant%20Setup%20Audit/participant-setup-audit-powerapp/power.config.json) contains the configured app and environment IDs.
 - `buildPath` is `./dist`.
 - The current local app URL in config is `http://localhost:5173`.
 
@@ -84,14 +89,17 @@ The required files are:
 2. `Sales Compensation Report (Previous Month)`
 3. `People`
 4. `Position`
-5. `Quota Assignment`
-6. `Payment Balance`
-7. `LOA Report`
-8. `Transfer to MSFT`
+5. `Worker Change Report`
+6. `Quota Assignment`
+7. `Payment Balance`
+8. `LOA Report`
+9. `Transfer to MSFT`
 
 Notes:
 
-- `Worker Change Report` is intentionally excluded from this app.
+- `Worker Change Report` accepts XLSX, XLS, or CSV and is required. Generate Report remains disabled until all nine source files parse successfully.
+- Matching WCR rows are grouped by employee and Effective Date. Dates relevant to the detected Audit change are shown once in `WCR Effective Date`; multiple distinct matching dates are separated by semicolons.
+- Missing or ambiguous WCR matches remain blank because WCR is supporting context rather than a required source.
 - `People` and `Position` are expected to be normal Excel files. Earlier encrypted versions were replaced with re-saved standard Excel files.
 
 ## 7. Employee ID rules
@@ -192,13 +200,18 @@ Relevant logic:
 
 ### LOB
 
-LOB resolution order:
+For active current-SCR employees, LOB is derived in this order:
 
-1. Current month SCR `Business Unit`
-2. Previous month SCR `Business Unit`
+1. Cost Center containing GCP -> `GCP`
+2. Job Family beginning with Sales Development -> `SD`
+3. Advertising Sales or Advertising Operations -> `LMS`
+4. LCS Sales or LCS Operations -> `LTS`
+5. Sales Solutions or Sales Solutions Operations -> `LSS`
+6. Global Sales Operations, except SalesQ VP -> `SD`
+7. Global Sales Operations with SalesQ VP -> `Global`
+8. Otherwise use People `Business_Unit`, displaying `TS` as `LTS` and `MS` as `LMS`
 
-Global filter LOB options are built only from SCR `Business Unit` values.
-People `Business_Unit` is not used for the LOB filter.
+The same derived LOB is used for filters, Dashboard population, and Analyst inference.
 
 ### Country
 
@@ -241,6 +254,8 @@ This logic exists in:
 Compared fields:
 
 - `Job Title`
+- `Job Level` from SCR `CF-CB-Career Band/Level - Worker`
+- `Job Grade` from SCR `CF LRV Global Job grade`
 - `Supervisory Manager`
 - `OTE (Base+Comm)`
 - `Commission Amount`
@@ -252,6 +267,14 @@ Important note:
 
 - The app still checks `OTE (Base+Comm)` changes for `changeSummary`.
 - However, the `previousOteBaseComm` and `currentOteBaseComm` output columns were removed from the report.
+- `previousJobLevelGrade` and `currentJobLevelGrade` show the two SCR values as `Level (Grade)`, for example `MR2 (09.1)`. New Hires have no previous value.
+- When Job Title, Job Level, or Job Grade changes, `auditSubcategory` uses a career-movement classification:
+  - A higher normalized grade is `Promotion` using `04 < 05 < 06 < 07 < 08.1 < 08.2 < 09.1 < 09.2 < 09.3 < 10 < 11 < 12 < A`.
+  - The same nonblank grade with an `IC` to `MR` level change is also `Promotion`.
+  - Same-grade IC/SP changes, lower grades, and unknown or incomplete grade movements are `Job Change`.
+  - The final value is `Promotion + Variable Change`, `Promotion - No Variable Change`, `Job Change + Variable Change`, or `Job Change - No Variable Change`.
+- Changes without a career movement retain the existing single-field, `Variable + Other Changes`, or `Multiple Changes - No Variable` classification.
+- The exact changed fields remain in `changeSummary`.
 
 ### Deferred Change While on LOA
 
@@ -349,6 +372,7 @@ Current visible output columns are defined in [App.tsx](/c:/Codex/PowerApps/Part
 
 Important output decisions:
 
+- `auditSubcategory` is placed immediately after `auditItem` in Audit and Verification tables.
 - Current month SCR `Active Status`, `On Leave`, and `First Day of Leave` are placed immediately after `Country`
 - `changeSummary` is placed immediately after the current month SCR LOA context columns
 - If current month SCR `On Leave = Yes`, `changeSummary` is prefixed with `[Currently on LOA]`
@@ -384,12 +408,16 @@ Workbook generation is handled in [engine.ts](/c:/Codex/PowerApps/Participant%20
 Sheets:
 
 1. `Audit Report`
-2. `Summary`
+2. `Column Guide`
+3. `Summary`
+4. `Verification Baseline`
+5. `SCR Population`
 
 `Summary` contains:
 
 - Uploaded file names
 - Audit counts by item
+- Audit counts by nonblank subcategory
 - Total row count
 
 ## 13. Current UI behaviors
@@ -408,6 +436,25 @@ Sheets:
 
 - Horizontal and vertical scrolling are intentionally confined to the Audit Results frame.
 - The entire page should no longer grow a global results scrollbar when the table becomes wide or tall.
+
+### Audit Subcategory
+
+- Audit Results and Follow-up Verification tables display `Audit Subcategory` next to `Audit Item`.
+- `Variable Change Only`, `Variable + Other Changes`, `Promotion + Variable Change`, and `Job Change + Variable Change` identify every audit action that requires an Annual Variable update.
+- Audit Results also displays Previous and Current Job Level (Grade). Job Level and Job Grade expectations are carried into Verification as `Not Verifiable` because the People-only follow-up does not contain those SCR fields.
+- `Manager Change Only` continues to use the separate `Manager Mismatch Only` verification treatment and remains outside Setup Required and Completion Rate.
+
+### Existing-participant Analyst recommendation
+
+- Country or Business Unit changes are reviewed for an Analyst routing-key change.
+- The routing key is current SCR Country + derived LOB; Region + derived LOB remains the fallback.
+- `analystName` remains the current People/Xactly owner.
+- `inferredAnalystName`, `analystReview`, and `inferenceBasis` show the app recommendation separately.
+- `analystReview` is `Change Suggested`, `No Change Suggested`, `Ambiguous / Unassigned`, or `No Routing Change`.
+- A Business Unit change within the same Country and derived LOB is `No Routing Change` and does not produce a suggested Analyst.
+- Employees whose routing key changed are excluded from the peer index so their old People Analyst does not influence the new assignment recommendation.
+- The recommendation is carried through Verification Baseline and Verification Report, while Dashboard Analyst counts continue to use actual People ownership.
+- Nonblank `inferredAnalystName` cells are highlighted light yellow in Audit and Verification Excel files.
 
 ## 14. Known sample-data observations
 
@@ -436,6 +483,9 @@ Examples already verified:
 - People metadata fields populate the report when the People record exists
 - `Commission Amount` exports as numeric
 - `OTE (Base+Comm)` columns are removed from the report
+- Audit Subcategory is carried from Audit Report to Verification Baseline and Verification Report
+- Older Verification Baselines without Audit Subcategory derive it from their field keys
+- The July workbook's 1,108 Change to Existing Participant rows classify as 692 Manager Change Only, 216 Variable Change Only, 173 Variable + Other Changes, 13 Multiple Changes - No Variable, and 14 Job Title Change Only
 
 ## 16. Common change locations
 
@@ -465,3 +515,81 @@ When making future changes:
 3. If logic changed, run a sample-data smoke test with `npx tsx -`
 4. If UI changed, capture a fresh browser screenshot
 5. Update this document if business rules or output columns changed
+
+## 18. Follow-up verification and dashboard
+
+### Follow-up workflow
+
+1. Run the initial audit with the eight source files.
+2. Download the initial workbook. Its `Verification Baseline` sheet stores expected People field values and a due date seven calendar days after generation.
+3. Later, upload the initial workbook and the latest People file in `Follow-up Verification`.
+4. Generate a workbook containing:
+   - `Verification Report`
+   - `Column Guide`
+   - `Field Details`
+   - `Summary`
+
+Progress values:
+
+- `Completed`
+- `Partially Completed`
+- `Pending`
+- `Manager Mismatch Only`
+- `Deferred`
+- `Not Verifiable`
+
+SLA values:
+
+- `On Time`
+- `Overdue`
+- `Not Due`
+- `Not Applicable`
+
+Direct People verification mappings:
+
+- SCR Job Title -> People `HR_Job_Title`
+- SCR Supervisory Manager -> People `Level_1_Manager`
+- SCR Commission Amount -> People `Annual_Variable`
+- SCR OTE less Commission Amount -> People `Salary`
+- SCR Country -> People `Country`
+- SCR Currency -> People `Salary Currency`
+
+SCR Business Unit, Position setup, and OKR assignment are `Not Verifiable` until an approved source mapping or additional follow-up file is available.
+
+### Dashboard
+
+- Commissioned employee population: distinct current-SCR employees with `Active Status = Yes`
+- A blank current-SCR Active Status is a Termination; absence from the current SCR is Transfer to Non-Sales
+- Region filter: All Regions, APAC, EMEA, LATAM, or NAMER when present
+- Headcount breakdowns: Region, derived LOB, and assigned/inferred Analyst
+- Setup Required: Completed + Partially Completed + Pending
+- Completion Rate: Completed / Setup Required
+- Manager Mismatch Only is shown separately; Deferred and Not Verifiable are excluded from Setup Required and Completion Rate
+- KPI tiles provide hover descriptions
+- PDF export uses a compact portrait print layout; HTML export is self-contained and retains an offline Region filter using aggregated data only
+
+### Analyst ownership inference
+
+Actual People `Analyst_Name` remains authoritative except for Transfer to Sales, which is treated like New Hire. Missing ownership is inferred from active current-SCR employees with existing People analyst mappings:
+
+1. Unique top Analyst for normalized SCR Country + derived LOB
+2. Unique top Analyst for resolved Region + derived LOB
+3. `Unassigned` when no candidates exist or the highest count is tied
+
+The baseline and follow-up reports retain `analystSource`, `analystConfidence`, and `analystSampleSize`. Inference affects dashboard ownership only and never writes back to People.
+
+### Audit Subcategory propagation
+
+- `auditItem` remains the stable parent action.
+- `auditSubcategory` is stored in Audit Report, Verification Baseline, Verification Report, and Field Details.
+- `changeSummary` remains the detailed list of changed fields.
+- Verification Summary includes counts by Audit Subcategory.
+- Dashboard Setup Required and Completion Rate calculations remain status-based and are not changed by the new classification.
+
+### LOB derivation
+
+For active current-SCR employees, apply this priority: Cost Center containing GCP -> GCP; Job Family beginning with Sales Development -> SD; Advertising Sales/Operations -> LMS; LCS Sales/Operations -> LTS; Sales Solutions/Operations -> LSS; Global Sales Operations -> SD except SalesQ VP -> Global. Otherwise use People `Business_Unit`, displaying TS as LTS and MS as LMS.
+
+## 19. Planned SharePoint source-file archive
+
+Not implemented in this checkpoint. The recommended future design is a solution-aware Power Automate flow triggered by the code app after a successful audit. It should create a unique processing-month/run folder and save the eight original input files without overwriting prior runs. Implementation requires the SharePoint site URL, document library, parent folder, connection reference, tenant permissions, and an upgrade of `@microsoft/power-apps` from `1.0.3` to at least `1.1.1`.
