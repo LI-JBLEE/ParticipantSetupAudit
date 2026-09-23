@@ -1024,6 +1024,9 @@ export function buildAuditReport(
   appendVariableCompensationMismatches(rows, processingMonth, filters, data, countryToRegion);
 
   for (const row of rows) {
+    if (row.auditSubcategory === "Variable Mismatch Only" && isYes(row.currentOnLeave)) {
+      row.auditItem = "Deferred Change While on LOA";
+    }
     row.previousJobLevelGrade = formatJobLevelGrade(data.previousScrById[row.employeeId]);
     row.currentJobLevelGrade = formatJobLevelGrade(data.currentScrById[row.employeeId]);
     row.wcrEffectiveDate = resolveWcrEffectiveDate(row, data.workerChangesById[row.employeeId] ?? []);
@@ -1537,9 +1540,12 @@ function buildVerificationExpectations(
       }
     };
 
-    if (row.auditItem === "Variable Compensation Mismatch") {
+    if (row.auditSubcategory === "Variable Mismatch Only") {
       if (current?.commissionAmount !== null && current?.commissionAmount !== undefined) {
-        add("annualVariable", "Annual Variable", String(current.commissionAmount), "number");
+        add(
+          "annualVariable", "Annual Variable", String(current.commissionAmount), "number",
+          deferred === "Yes" ? "Variable mismatch deferred until LOA return; regenerate the audit with the latest SCR after return." : "",
+        );
       }
       continue;
     }
@@ -1683,7 +1689,14 @@ function matchesExpectation(expectation: VerificationExpectation, actualValue: s
     const actual = normalizeText(actualValue);
     return expectation.expectedValue.split("|").some((value) => normalizeText(value) === actual);
   }
-  if (expectation.rule === "date") return expectation.expectedValue === actualValue;
+  if (expectation.rule === "date") {
+    if (expectation.fieldKey === "terminationDate") {
+      const expected = parseIsoDate(expectation.expectedValue);
+      const actual = parseIsoDate(actualValue);
+      return expected !== null && actual !== null && actual.getTime() >= expected.getTime();
+    }
+    return expectation.expectedValue === actualValue;
+  }
   return normalizeText(expectation.expectedValue) === normalizeText(actualValue);
 }
 

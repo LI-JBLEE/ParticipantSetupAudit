@@ -79,6 +79,10 @@ The verification workbook includes `Verification Report`, `Column Guide`, `Field
 
 Job Level, Job Grade, Business Unit, Position, and OKR changes remain `Not Verifiable` when the People-only follow-up does not contain an approved direct mapping.
 
+Termination verification requires People Employee Status to be `Terminated` and, when the audit has an SCR termination date, People Termination Date to be on or after that date. Blank or earlier People dates remain outstanding. The current SCR date takes priority, falling back to the previous SCR date. If only one of the two checks passes, the overall status remains `Partially Completed`.
+
+`Variable Mismatch Only` rows with `Currently on LOA = Yes` use the `Deferred Change While on LOA` Audit Item. Outstanding mismatches remain `Deferred` in follow-up verification, with no applicable SLA, and are excluded from Dashboard Setup Required and Completion Rate. The existing completion rule still marks a resolved mismatch `Completed`. Regenerate the initial audit workbook to apply this classification to previously exported reports. After LOA return, generate a fresh audit using the latest SCR to make unresolved mismatches actionable again; a People-only follow-up does not refresh SCR leave status.
+
 ## Dashboard
 
 The Dashboard uses distinct current-SCR employees with `Active Status = Yes` for commissioned employee counts. Region filtering updates the KPI, derived LOB, Analyst, and execution views. Setup Required includes Completed, Partially Completed, and Pending; Completion Rate is Completed divided by Setup Required. Manager Mismatch Only is separate, while Deferred and Not Verifiable are excluded.

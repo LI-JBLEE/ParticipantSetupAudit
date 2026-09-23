@@ -904,6 +904,29 @@ if (statusAudit.rows.find((row) => row.employeeId === terminatedEmployeeId)?.aud
   throw new Error("A blank current SCR Active Status was not classified as Termination.");
 }
 
+const terminationExpectations = statusAudit.expectations.filter((item) => item.employeeId === terminatedEmployeeId);
+for (const [date, matched] of [[new Date(2026, 6, 10), true], [new Date(2026, 7, 1), true],
+  [new Date(2026, 6, 9), false], [null, false]] as const) {
+  const verification = buildFollowUpVerification(terminationExpectations, {
+    [terminatedEmployeeId]: { ...statusData.peopleById[terminatedEmployeeId], employeeStatus: "Terminated", terminationDate: date },
+  });
+  if (verification.fieldResults.find((item) => item.fieldKey === "terminationDate")?.matched !== (matched ? "Yes" : "No") ||
+    verification.rows[0]?.progressStatus !== (matched ? "Completed" : "Partially Completed")) {
+    throw new Error("Termination date must be on or after the SCR date; blank or earlier dates remain outstanding.");
+  }
+}
+const terminationFallbackData = structuredClone(statusData);
+terminationFallbackData.previousScrById[terminatedEmployeeId].terminationDate = new Date(2026, 6, 8);
+const terminationPriorityAudit = buildAuditReport("JUL-2026", filters, terminationFallbackData, countryToRegion);
+if (terminationPriorityAudit.expectations.find((item) => item.fieldKey === "terminationDate")?.expectedValue !== "2026-07-10") {
+  throw new Error("Termination verification must prefer the current SCR date.");
+}
+terminationFallbackData.currentScrById[terminatedEmployeeId].terminationDate = null;
+const terminationFallbackAudit = buildAuditReport("JUL-2026", filters, terminationFallbackData, countryToRegion);
+if (terminationFallbackAudit.expectations.find((item) => item.fieldKey === "terminationDate")?.expectedValue !== "2026-07-08") {
+  throw new Error("Termination verification must use the previous SCR date when the current date is blank.");
+}
+
 const changedEmployeeId = "000111";
 const changeData = createEmptyAppData();
 changeData.previousScrById[changedEmployeeId] = scr(changedEmployeeId, new Date(2020, 0, 1), "Changed Employee");
@@ -1042,6 +1065,66 @@ if (
   variableToleranceVerification.rows.find((row) => row.employeeId === "000132")?.progressStatus !== "Pending"
 ) {
   throw new Error("Annual Variable verification did not treat gaps below 10 as complete and gaps of 10 as pending.");
+}
+
+// Exercise the exported baseline, follow-up workbook, and shared manager summary path.
+const loaMismatchData = structuredClone(variableMismatchData);
+for (const employeeId of ["000130", "000132"]) {
+  loaMismatchData.currentScrById[employeeId].onLeave = "Yes";
+  loaMismatchData.previousScrById[employeeId].onLeave = "Yes";
+  loaMismatchData.peopleById[employeeId].employeeStatus = "LOA";
+}
+const loaMismatchAudit = buildAuditReport("JUL-2026", filters, loaMismatchData, countryToRegion);
+if (loaMismatchAudit.rows.length !== 2 || loaMismatchAudit.rows.some((row) =>
+  row.auditItem !== "Deferred Change While on LOA" || row.auditSubcategory !== "Variable Mismatch Only" ||
+  row.currentOnLeave !== "Yes")) {
+  throw new Error("LOA-only Variable mismatches must be classified as deferred in the Audit Report.");
+}
+const loaMismatchBuffer = buildAuditWorkbook(
+  loaMismatchAudit.rows, {}, loaMismatchAudit.expectations, loaMismatchData.currentScrById,
+);
+const loaMismatchWorkbook = XLSX.read(loaMismatchBuffer, { type: "array" });
+const loaMismatchExcelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(loaMismatchWorkbook.Sheets["Audit Report"]);
+if (loaMismatchExcelRows.some((row) => !Object.values(row).includes("Deferred Change While on LOA"))) {
+  throw new Error("Audit Excel lost the deferred classification.");
+}
+const loaMismatchBaseline = await parseVerificationBaselineFile(new File([loaMismatchBuffer], "loa-audit.xlsx"));
+if (loaMismatchBaseline.data.expectations.length !== 2 || loaMismatchBaseline.data.expectations.some((item) =>
+  item.deferred !== "Yes" || item.fieldKey !== "annualVariable")) {
+  throw new Error("LOA Variable mismatch baseline must retain deferred Annual Variable expectations.");
+}
+const loaMismatchVerification = buildFollowUpVerification(
+  loaMismatchBaseline.data.expectations, loaMismatchData.peopleById, new Date(2026, 11, 31),
+);
+if (loaMismatchVerification.rows.some((row) => row.progressStatus !== "Deferred" || row.slaStatus !== "Not Applicable")) {
+  throw new Error("Unresolved LOA Variable mismatches must stay Deferred without an overdue SLA.");
+}
+const loaVerificationWorkbook = XLSX.read(buildFollowUpWorkbook(loaMismatchVerification, {}), { type: "array" });
+const loaVerificationExcelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(loaVerificationWorkbook.Sheets["Verification Report"]);
+const loaVerificationSummary = XLSX.utils.sheet_to_json<Record<string, unknown>>(loaVerificationWorkbook.Sheets.Summary);
+if (loaVerificationExcelRows.some((row) => row.progressStatus !== "Deferred") ||
+  !loaVerificationSummary.some((row) => row.Name === "Deferred" && row.Value === 2)) {
+  throw new Error("Verification Excel and Summary must retain the Deferred status and count.");
+}
+const loaMismatchDashboard = buildDashboardModel(
+  loaMismatchBaseline.data.currentScrById, loaMismatchData.peopleById,
+  [...result.rows, ...loaMismatchVerification.rows], countryToRegion,
+);
+if (loaMismatchDashboard.setupRequired !== 2 || loaMismatchDashboard.completionRate !== 0.5 ||
+  loaMismatchDashboard.pending !== 0 ||
+  loaMismatchDashboard.byAnalyst.reduce((total, row) => total + row.required, 0) !== 2) {
+  throw new Error("Deferred Variable mismatches must not reduce the manager summary completion rate.");
+}
+// A fresh audit after return to work must make an unresolved mismatch actionable again.
+for (const employeeId of ["000130", "000132"]) {
+  loaMismatchData.currentScrById[employeeId].onLeave = "";
+}
+const returnedMismatchAudit = buildAuditReport("JUL-2026", filters, loaMismatchData, countryToRegion);
+const returnedMismatchVerification = buildFollowUpVerification(returnedMismatchAudit.expectations, loaMismatchData.peopleById);
+if (returnedMismatchAudit.expectations.some((item) => item.deferred === "Yes") ||
+  returnedMismatchVerification.rows.some((row) => row.progressStatus !== "Pending") ||
+  summarizeSetupExecution(returnedMismatchVerification.rows).setupRequired !== 2) {
+  throw new Error("Outstanding Variable mismatches must re-enter setup execution after SCR confirms LOA return.");
 }
 
 const careerMovementCases: Array<{
