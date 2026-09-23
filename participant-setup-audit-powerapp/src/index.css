@@ -752,7 +752,7 @@ tbody tr:hover td {
 }
 
 .dashboard-kpi-row-execution {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .dashboard-kpi {
@@ -1012,7 +1012,7 @@ tbody tr:hover td {
   }
 
   .dashboard-kpi-row-execution {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
   .dashboard-kpi {

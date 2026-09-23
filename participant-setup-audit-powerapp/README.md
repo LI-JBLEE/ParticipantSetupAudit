@@ -79,7 +79,7 @@ The verification workbook includes `Verification Report`, `Column Guide`, `Field
 
 Job Level, Job Grade, Business Unit, Position, and OKR changes remain `Not Verifiable` when the People-only follow-up does not contain an approved direct mapping.
 
-Termination verification requires People Employee Status to be `Terminated` and, when the audit has an SCR termination date, People Termination Date to be on or after that date. Blank or earlier People dates remain outstanding. The current SCR date takes priority, falling back to the previous SCR date. If only one of the two checks passes, the overall status remains `Partially Completed`.
+Termination verification requires People Employee Status to be `Terminated` and, when the audit has an SCR termination date, People Termination Date to be present and strictly later than six calendar months before that date. Blank dates and dates exactly six months earlier or older remain outstanding; dates on or after the SCR date also pass. The cutoff is clamped to the last day of a shorter month (August 31 becomes February 28/29). The current SCR date takes priority, falling back to the previous SCR date. If only one of the two checks passes, the overall status remains `Partially Completed`.
 
 `Variable Mismatch Only` rows with `Currently on LOA = Yes` use the `Deferred Change While on LOA` Audit Item. Outstanding mismatches remain `Deferred` in follow-up verification, with no applicable SLA, and are excluded from Dashboard Setup Required and Completion Rate. The existing completion rule still marks a resolved mismatch `Completed`. Regenerate the initial audit workbook to apply this classification to previously exported reports. After LOA return, generate a fresh audit using the latest SCR to make unresolved mismatches actionable again; a People-only follow-up does not refresh SCR leave status.
 
@@ -88,6 +88,8 @@ Termination verification requires People Employee Status to be `Terminated` and,
 The Dashboard uses distinct current-SCR employees with `Active Status = Yes` for commissioned employee counts. Region filtering updates the KPI, derived LOB, Analyst, and execution views. Setup Required includes Completed, Partially Completed, and Pending; Completion Rate is Completed divided by Setup Required. Manager Mismatch Only is separate, while Deferred and Not Verifiable are excluded.
 
 Dashboard KPI tiles include hover descriptions. `PDF` opens the compact portrait print layout. `HTML` downloads a self-contained interactive dashboard whose Region filter works offline using aggregated data only.
+
+`Term Update Pending`, between Pending and Manager Mismatch Only, counts Termination actions with Pending or Partially Completed status for the selected region. These are identified for a later mass update and remain included in the existing status cards, Setup Required, and Completion Rate. The card and explanation appear in the app, PDF print layout, and exported HTML.
 
 When a setup target has no People `Analyst_Name`, the dashboard infers ownership from existing active employee mappings:
 

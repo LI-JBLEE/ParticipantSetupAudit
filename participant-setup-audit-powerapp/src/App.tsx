@@ -1141,9 +1141,11 @@ function Dashboard({
           <KpiCard label="Completed" value={model.completed} tone="green" />
           <KpiCard label="Partially Completed" value={model.partiallyCompleted} tone="amber" />
           <KpiCard label="Pending" value={model.pending} tone="coral" />
+          <KpiCard label="Term Update Pending" value={model.termUpdatePending} tone="blue" />
           <KpiCard label="Manager Mismatch Only" value={model.managerMismatchOnly} tone="amber" />
           <KpiCard label="Completion Rate" value={model.completionRate} tone="blue" percent />
         </div>
+        <p className="muted">Term Update Pending: {METRIC_DESCRIPTIONS["Term Update Pending"]}</p>
       </section>
 
       {model.commissionedEmployees === 0 && model.setupRequired === 0 ? (

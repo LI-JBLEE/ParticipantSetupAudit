@@ -1379,6 +1379,8 @@ export function summarizeSetupExecution(rows: VerificationResultRow[]) {
     partiallyCompleted: setupRows.filter((row) => row.progressStatus === "Partially Completed").length,
     pending: setupRows.filter((row) => row.progressStatus === "Pending").length,
     managerMismatchOnly: rows.filter((row) => row.progressStatus === "Manager Mismatch Only").length,
+    termUpdatePending: rows.filter((row) => row.auditItem === "Termination" &&
+      (row.progressStatus === "Partially Completed" || row.progressStatus === "Pending")).length,
     completionRate: setupRows.length > 0 ? completed / setupRows.length : 0,
   };
 }
@@ -1430,6 +1432,7 @@ export function buildDashboardModel(
     partiallyCompleted: execution.partiallyCompleted,
     pending: execution.pending,
     managerMismatchOnly: execution.managerMismatchOnly,
+    termUpdatePending: execution.termUpdatePending,
     completionRate: execution.completionRate,
     latestPeopleDate: formatDate(findLatestPeopleDate(peopleById)),
     byRegion: buildDashboardBreakdown(
@@ -1693,7 +1696,11 @@ function matchesExpectation(expectation: VerificationExpectation, actualValue: s
     if (expectation.fieldKey === "terminationDate") {
       const expected = parseIsoDate(expectation.expectedValue);
       const actual = parseIsoDate(actualValue);
-      return expected !== null && actual !== null && actual.getTime() >= expected.getTime();
+      if (!expected || !actual) return false;
+      // Calendar months, clamped for shorter months (e.g. Aug 31 -> Feb 28/29).
+      const cutoff = new Date(expected.getFullYear(), expected.getMonth() - 5, 0);
+      cutoff.setDate(Math.min(expected.getDate(), cutoff.getDate()));
+      return actual.getTime() > cutoff.getTime();
     }
     return expectation.expectedValue === actualValue;
   }

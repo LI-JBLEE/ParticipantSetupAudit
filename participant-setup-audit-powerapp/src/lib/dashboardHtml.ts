@@ -79,7 +79,7 @@ export function buildDashboardHtml(
     .kpis { display: grid; gap: 10px; }
     .kpi-row { display: grid; gap: 10px; }
     .kpi-row.population { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .kpi-row.execution { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .kpi-row.execution { grid-template-columns: repeat(6, minmax(0, 1fr)); }
     .kpi { display: grid; gap: 12px; min-height: 112px; padding: 16px; border: 1px solid #dbe3ec; border-top: 4px solid #64748b; border-radius: 10px; background: #fff; box-shadow: 0 4px 16px rgba(15,23,42,.05); }
     .kpi span { color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; }
     .kpi strong { align-self: end; font-size: clamp(27px, 3vw, 38px); letter-spacing: -.04em; }
@@ -110,7 +110,7 @@ export function buildDashboardHtml(
       .dashboard-script-filter, .dashboard-fallback-filter { display: none !important; } .dashboard-js .print-region { display: block; } .print-region, .dashboard-fallback-context { color: #cbd5e1; font-size: 9px; font-weight: 700; text-transform: uppercase; }
       .dashboard-script-view, .dashboard-fallback-view { gap: 6px; }
       .hero { padding: 10px 12px; } h1 { font-size: 20px; } .hero-copy, .meta, .eyebrow { font-size: 9px; }
-      .kpis, .kpi-row { gap: 5px; } .kpi-row.population { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kpi-row.execution { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+      .kpis, .kpi-row { gap: 5px; } .kpi-row.population { grid-template-columns: repeat(3, minmax(0, 1fr)); } .kpi-row.execution { grid-template-columns: repeat(6, minmax(0, 1fr)); }
       .kpi { gap: 4px; min-height: 58px; padding: 7px 8px; box-shadow: none; } .kpi span { font-size: 8px; } .kpi strong { font-size: 21px; }
       .panel { padding: 9px; border-radius: 7px; } .panel-head { flex-direction: row; gap: 6px; margin-bottom: 6px; } .panel-head h2, .chart h2 { font-size: 12px; }
       .panel-copy, .caption { font-size: 8px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
@@ -184,6 +184,7 @@ export const METRIC_DESCRIPTIONS: Record<string, string> = {
   Completed: "All verifiable setup fields match the expected values in the follow-up People file.",
   "Partially Completed": "Some verifiable setup fields are complete, while others are still pending.",
   Pending: "None of the verifiable setup fields match the expected values yet.",
+  "Term Update Pending": "Termination items awaiting a later mass update; already included in Partially Completed or Pending. Setup Required and Completion Rate are unchanged.",
   "Manager Mismatch Only": "The only outstanding change is the Level 1 Manager; excluded from Setup Required and Completion Rate.",
   "Completion Rate": "Completed divided by Completed, Partially Completed, and Pending setup actions.",
 };
@@ -218,13 +219,14 @@ function buildKpis(model: DashboardModel): string {
     { label: "Completed", value: model.completed, tone: "green" },
     { label: "Partially Completed", value: model.partiallyCompleted, tone: "amber" },
     { label: "Pending", value: model.pending, tone: "coral" },
+    { label: "Term Update Pending", value: model.termUpdatePending, tone: "blue" },
     { label: "Manager Mismatch Only", value: model.managerMismatchOnly, tone: "amber" },
     { label: "Completion Rate", value: model.completionRate, tone: "blue", percent: true },
   ];
   const cards = metrics.map(
     (metric) => `<article class="kpi tone-${metric.tone}" title="${escapeHtml(METRIC_DESCRIPTIONS[metric.label])}"><span>${escapeHtml(metric.label)}</span><strong>${metric.percent ? formatPercent(metric.value) : formatCount(metric.value)}</strong></article>`,
   );
-  return `<div class="kpi-row population">${cards.slice(0, 3).join("")}</div><div class="kpi-row execution">${cards.slice(3).join("")}</div>`;
+  return `<div class="kpi-row population">${cards.slice(0, 3).join("")}</div><div class="kpi-row execution">${cards.slice(3).join("")}</div><p class="panel-copy">Term Update Pending: ${escapeHtml(METRIC_DESCRIPTIONS["Term Update Pending"])}</p>`;
 }
 
 function buildTable(

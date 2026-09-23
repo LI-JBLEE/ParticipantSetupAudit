@@ -359,6 +359,30 @@ const dashboard = buildDashboardModel(
   result.rows,
   { singapore: "APAC" },
 );
+const termSummaryRows = [
+  { ...result.rows[0], verificationId: "term-pending", auditItem: "Termination", progressStatus: "Pending" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "term-partial", auditItem: "Termination", progressStatus: "Partially Completed" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "term-complete", auditItem: "Termination", progressStatus: "Completed" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "term-deferred", auditItem: "Termination", progressStatus: "Deferred" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "other-pending", auditItem: "New Hire", progressStatus: "Pending" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "emea-term", auditItem: "Termination", progressStatus: "Pending" as const, region: "EMEA" },
+];
+const termModels = Object.fromEntries(["All Regions", "APAC", "EMEA", "LATAM"].map((region) => [
+  region, buildDashboardModel({}, {}, termSummaryRows, {}, region),
+]));
+if (termModels["All Regions"].termUpdatePending !== 3 || termModels.APAC.termUpdatePending !== 2 ||
+  termModels.EMEA.termUpdatePending !== 1 || termModels.LATAM.termUpdatePending !== 0 ||
+  termModels.APAC.setupRequired !== 4 || termModels.APAC.partiallyCompleted !== 1 ||
+  termModels.APAC.pending !== 2 || termModels.APAC.completionRate !== 0.25) {
+  throw new Error("Term Update Pending must be a region-filtered subset without changing existing execution totals.");
+}
+const termHtml = buildDashboardHtml(termModels, "APAC", "JUL-2026");
+if (!termHtml.includes("Term Update Pending</span><strong>2</strong>") ||
+  !(termHtml.indexOf(">Pending</span>") < termHtml.indexOf(">Term Update Pending</span>") &&
+    termHtml.indexOf(">Term Update Pending</span>") < termHtml.indexOf(">Manager Mismatch Only</span>")) ||
+  !termHtml.includes("already included in Partially Completed or Pending")) {
+  throw new Error("HTML summary must place the Term Update Pending card after Pending and explain its overlap.");
+}
 const dashboardHtml = buildDashboardHtml(
   { "All Regions": dashboard, APAC: { ...dashboard, commissionedEmployees: 7 } },
   "APAC",
@@ -906,13 +930,28 @@ if (statusAudit.rows.find((row) => row.employeeId === terminatedEmployeeId)?.aud
 
 const terminationExpectations = statusAudit.expectations.filter((item) => item.employeeId === terminatedEmployeeId);
 for (const [date, matched] of [[new Date(2026, 6, 10), true], [new Date(2026, 7, 1), true],
-  [new Date(2026, 6, 9), false], [null, false]] as const) {
+  [new Date(2026, 6, 9), true], [new Date(2026, 0, 11), true],
+  [new Date(2026, 0, 10), false], [new Date(2026, 0, 9), false], [null, false]] as const) {
   const verification = buildFollowUpVerification(terminationExpectations, {
     [terminatedEmployeeId]: { ...statusData.peopleById[terminatedEmployeeId], employeeStatus: "Terminated", terminationDate: date },
   });
   if (verification.fieldResults.find((item) => item.fieldKey === "terminationDate")?.matched !== (matched ? "Yes" : "No") ||
     verification.rows[0]?.progressStatus !== (matched ? "Completed" : "Partially Completed")) {
-    throw new Error("Termination date must be on or after the SCR date; blank or earlier dates remain outstanding.");
+    throw new Error("Termination date must be present and strictly later than six calendar months before the SCR date.");
+  }
+}
+for (const [expectedDate, actualDate, matched] of [
+  ["2026-08-31", new Date(2026, 1, 28), false],
+  ["2026-08-31", new Date(2026, 2, 1), true],
+  ["2024-08-31", new Date(2024, 1, 29), false],
+  ["2024-08-31", new Date(2024, 2, 1), true],
+] as const) {
+  const verification = buildFollowUpVerification(
+    terminationExpectations.map((item) => item.fieldKey === "terminationDate" ? { ...item, expectedValue: expectedDate } : item),
+    { [terminatedEmployeeId]: { ...statusData.peopleById[terminatedEmployeeId], employeeStatus: "Terminated", terminationDate: actualDate } },
+  );
+  if (verification.rows[0]?.progressStatus !== (matched ? "Completed" : "Partially Completed")) {
+    throw new Error("Six-month termination cutoff must clamp to the last day of February, including leap years.");
   }
 }
 const terminationFallbackData = structuredClone(statusData);

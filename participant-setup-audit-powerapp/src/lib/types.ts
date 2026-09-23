@@ -312,6 +312,7 @@ export interface DashboardModel {
   partiallyCompleted: number;
   pending: number;
   managerMismatchOnly: number;
+  termUpdatePending: number;
   completionRate: number;
   latestPeopleDate: string;
   byRegion: DashboardBreakdownRow[];
