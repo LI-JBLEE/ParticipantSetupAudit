@@ -1,0 +1,1453 @@
+import XLSXImport from "xlsx-js-style";
+import { strFromU8, unzipSync } from "fflate";
+import { buildDashboardHtml, buildDashboardHtmlFileName } from "./dashboardHtml";
+import {
+  buildAuditWorkbook,
+  buildAuditReport,
+  buildDashboardModel,
+  buildFollowUpVerification,
+  buildFollowUpWorkbook,
+  createEmptyAppData,
+  deriveAuditSubcategory,
+  parseQuotaAssignmentFile,
+  parseScrFile,
+  parseVerificationBaselineFile,
+  parseWorkerChangeReportFile,
+  summarizeSetupExecution,
+} from "./engine";
+import type { PeopleRecord, ScrRecord, VerificationExpectation } from "./types";
+
+const XLSX = ((XLSXImport as unknown as { default?: typeof XLSXImport }).default ?? XLSXImport) as typeof XLSXImport;
+
+function assertColumnGuide(workbookBuffer: ArrayBuffer, reportName: string): void {
+  const workbook = XLSX.read(workbookBuffer, { type: "array" });
+  const reportSheet = workbook.Sheets[reportName];
+  const guideSheet = workbook.Sheets["Column Guide"];
+  if (!reportSheet || !guideSheet) throw new Error(`${reportName} workbook is missing the Column Guide sheet.`);
+  const reportHeaders = (XLSX.utils.sheet_to_json<string[]>(reportSheet, { header: 1 })[0] ?? []).map(String);
+  const guideRows = XLSX.utils.sheet_to_json<{ Column: string }>(guideSheet, { defval: "" });
+  const guideColumns = new Set(guideRows.map((row) => row.Column));
+  if (reportHeaders.length !== guideColumns.size || reportHeaders.some((header) => !guideColumns.has(header))) {
+    throw new Error(`${reportName} Column Guide does not cover every report column.`);
+  }
+}
+
+const people: PeopleRecord = {
+  employeeId: "000081",
+  fullName: "Test Employee",
+  firstName: "Test",
+  lastName: "Employee",
+  region: "APAC",
+  businessUnit: "TS",
+  country: "Singapore",
+  analystName: "Test Analyst",
+  planEffectiveDate: new Date(2026, 6, 1),
+  planType: "Sales",
+  effectiveStartDate: new Date(2026, 6, 1),
+  uploadDate: new Date(2026, 6, 22),
+  employeeStatus: "Active",
+  terminationDate: null,
+  salary: 100,
+  salaryCurrency: "SGD",
+  annualVariable: 50,
+  hrJobTitle: "Account Executive",
+  level1Manager: "Current Manager (123456)",
+};
+
+const base = {
+  processingMonth: "JUL-2026",
+  generatedAt: "2026-07-15T00:00:00.000Z",
+  dueDate: "2026-07-21",
+  employeeId: people.employeeId,
+  employeeName: people.fullName,
+  region: people.region,
+  lob: people.businessUnit,
+  country: people.country,
+  analystName: people.analystName,
+  inferredAnalystName: "",
+  analystReview: "",
+  inferenceBasis: "",
+  analystSource: "People",
+  analystConfidence: "Confirmed",
+  analystSampleSize: 0,
+  auditItem: "Change to Existing Participant",
+  auditSubcategory: "",
+  wcrEffectiveDate: "",
+  baselineValue: "",
+  deferred: "No",
+  note: "",
+} satisfies Omit<VerificationExpectation, "verificationId" | "fieldKey" | "fieldLabel" | "expectedValue" | "rule">;
+
+const expectations: VerificationExpectation[] = [
+  {
+    ...base,
+    verificationId: "completed",
+    fieldKey: "hrJobTitle",
+    fieldLabel: "HR Job Title",
+    expectedValue: people.hrJobTitle,
+    rule: "text",
+  },
+  {
+    ...base,
+    verificationId: "partial",
+    fieldKey: "record",
+    fieldLabel: "People Record",
+    expectedValue: "Present",
+    rule: "exists",
+  },
+  {
+    ...base,
+    verificationId: "partial",
+    fieldKey: "level1Manager",
+    fieldLabel: "Level 1 Manager",
+    expectedValue: "Expected Manager (654321)",
+    rule: "text",
+  },
+  {
+    ...base,
+    verificationId: "manager-only",
+    fieldKey: "level1Manager",
+    fieldLabel: "Level 1 Manager",
+    expectedValue: "Expected Manager (654321)",
+    rule: "text",
+  },
+];
+
+const result = buildFollowUpVerification(expectations, { [people.employeeId]: people }, people.uploadDate ?? new Date());
+const completed = result.rows.find((row) => row.verificationId === "completed");
+const partial = result.rows.find((row) => row.verificationId === "partial");
+const managerOnly = result.rows.find((row) => row.verificationId === "manager-only");
+if (completed?.progressStatus !== "Completed") throw new Error("Expected a completed verification row.");
+if (partial?.progressStatus !== "Partially Completed" || partial.slaStatus !== "Overdue") {
+  throw new Error("Expected a partially completed overdue verification row.");
+}
+if (managerOnly?.progressStatus !== "Manager Mismatch Only" || managerOnly.slaStatus !== "Not Applicable") {
+  throw new Error("Expected a manager-only mismatch outside setup execution and SLA counts.");
+}
+if (managerOnly.auditSubcategory !== "Manager Change Only") {
+  throw new Error("Expected an old baseline without a subcategory to derive Manager Change Only.");
+}
+if (
+  deriveAuditSubcategory(["Commission Amount"]) !== "Variable Change Only" ||
+  deriveAuditSubcategory(["Job Title", "Commission Amount"]) !== "Variable + Other Changes" ||
+  deriveAuditSubcategory(["Job Title", "Supervisory Manager"]) !== "Multiple Changes - No Variable"
+) {
+  throw new Error("Audit subcategory classification did not preserve Variable change visibility.");
+}
+const executionSummary = summarizeSetupExecution(result.rows);
+if (
+  executionSummary.setupRequired !== 2 ||
+  executionSummary.completed !== 1 ||
+  executionSummary.partiallyCompleted !== 1 ||
+  executionSummary.pending !== 0 ||
+  executionSummary.managerMismatchOnly !== 1 ||
+  executionSummary.completionRate !== 0.5
+) {
+  throw new Error("Setup execution summary did not match the Dashboard status rules.");
+}
+
+const followUpWorkbook = buildFollowUpWorkbook(result, {});
+if (followUpWorkbook.byteLength === 0) {
+  throw new Error("Follow-up verification workbook was empty.");
+}
+assertColumnGuide(followUpWorkbook, "Verification Report");
+
+const scr = (employeeId: string, hireDate: Date, fullName: string, country = "Singapore"): ScrRecord => ({
+  employeeId,
+  firstName: fullName.split(" ")[0] ?? fullName,
+  lastName: fullName.split(" ")[1] ?? "",
+  fullName,
+  originalHireDate: hireDate,
+  activeStatus: "Yes",
+  onLeave: "",
+  firstDayOfLeave: null,
+  hireDate,
+  isRehire: "No",
+  terminationDate: null,
+  jobTitle: "Account Executive",
+  jobLevel: "IC3",
+  jobGrade: "08.2",
+  supervisoryManager: "Manager (123456)",
+  oteBaseComm: 150,
+  commissionAmount: 50,
+  costCenter: "",
+  jobFamily: "",
+  businessUnit: "Sales Solutions",
+  country,
+  currency: "SGD",
+});
+
+const parsedScr = await parseScrFile(
+  new File(
+    [
+      [
+        "Employee ID,Active Status,Hire Date,Business Unit,Country,Job Family Group,Job Family,Cost Center - ID,Cost Center,CF-CB-Career Band/Level - Worker,CF LRV Global Job grade,Commission Amount,Commission (Brazil - 12 months)",
+        "000100,Yes,2020-01-01,Other,Singapore,Wrong Group,Sales Development Representative,12345,NAMER GCP Enterprise,MR2,09.1,10,20",
+      ].join("\n"),
+    ],
+    "scr.csv",
+    { type: "text/csv" },
+  ),
+);
+if (
+  parsedScr.data["000100"]?.jobFamily !== "Sales Development Representative" ||
+  parsedScr.data["000100"]?.costCenter !== "NAMER GCP Enterprise" ||
+  parsedScr.data["000100"]?.jobLevel !== "MR2" ||
+  parsedScr.data["000100"]?.jobGrade !== "09.1" ||
+  parsedScr.data["000100"]?.commissionAmount !== 20
+) {
+  throw new Error("SCR parser did not select the required exact-purpose columns.");
+}
+
+const workerChangeMatrix = [
+  ["LI GSC Worker Change Report"],
+  ["Start Date", "2026-07-16"],
+  ["End Date", "2026-08-15"],
+  [
+    "Employee ID",
+    "Legal Name",
+    "Effective Date",
+    "Business Process Type",
+    "Business Process Reason",
+    "Job Profile - Current",
+    "Job Profile - Proposed",
+    "Manager - Current",
+    "Manager - Proposed",
+    "Cost Center - Current",
+    "Cost Center - Proposed",
+    "Companies - Current",
+    "Company - Proposed",
+    "Location - Current",
+    "Location - Proposed",
+    "Base Pay - Current",
+    "Currency",
+    "Base Pay - Proposed",
+    "Currency",
+    "Commission Amount - Current",
+    "Currency",
+    "Commission Amount - Proposed",
+    "Currency",
+  ],
+  [
+    "000111",
+    "Changed Employee",
+    "2026-07-10",
+    "Change Job",
+    "Promotion",
+    "Account Executive",
+    "Senior Account Executive",
+    "Current Manager",
+    "Current Manager",
+    "Sales",
+    "Sales",
+    "LinkedIn Singapore",
+    "LinkedIn Singapore",
+    "SG-Singapore",
+    "SG-Singapore",
+    100,
+    "SGD",
+    125,
+    "SGD",
+    50,
+    "SGD",
+    75,
+    "SGD",
+  ],
+  ["000111", "Changed Employee", "2026-07-10", "Change Organization Assignments for Worker"],
+  [
+    "000111",
+    "Changed Employee",
+    "2026-07-12",
+    "Change Organization Assignments for Worker",
+    "",
+    "",
+    "",
+    "Current Manager",
+    "Different Manager",
+  ],
+];
+const workerChangeCsv = workerChangeMatrix.map((row) => row.join(",")).join("\n");
+const workerChangeWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(workerChangeWorkbook, XLSX.utils.aoa_to_sheet(workerChangeMatrix), "Worker Change Report");
+const [parsedWorkerChangeCsv, parsedWorkerChangeXlsx] = await Promise.all([
+  parseWorkerChangeReportFile(new File([workerChangeCsv], "worker-change.csv", { type: "text/csv" })),
+  parseWorkerChangeReportFile(
+    new File([XLSX.write(workerChangeWorkbook, { type: "array", bookType: "xlsx" })], "worker-change.xlsx"),
+  ),
+]);
+if (
+  parsedWorkerChangeCsv.rows !== 3 ||
+  parsedWorkerChangeXlsx.rows !== 3 ||
+  !parsedWorkerChangeCsv.data["000111"]?.some((row) => row.signals.includes("commission"))
+) {
+  throw new Error("Worker Change Report CSV and XLSX files did not parse consistently.");
+}
+
+const quotaMatrix = [
+  ["# Quota Name", "Type", "Name", "Person Name (Employee ID)", "Effective Start Date", "JUL-2026", "AUG-2026"],
+  ["OKR Quota", "Position", "OKR Quota", "Nitya Rao (245203)", "2026-07-01", 7160.3775, 0],
+];
+const quotaCsv = quotaMatrix.map((row) => row.join(",")).join("\n");
+const quotaWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(quotaWorkbook, XLSX.utils.aoa_to_sheet(quotaMatrix), "Quota Assignment");
+const [parsedQuotaCsv, parsedQuotaXlsx] = await Promise.all([
+  parseQuotaAssignmentFile(new File([quotaCsv], "quota.csv", { type: "text/csv" })),
+  parseQuotaAssignmentFile(new File([XLSX.write(quotaWorkbook, { type: "array", bookType: "xlsx" })], "quota.xlsx")),
+]);
+const csvQuotaRow = parsedQuotaCsv.data[0];
+const xlsxQuotaRow = parsedQuotaXlsx.data[0];
+if (
+  csvQuotaRow?.monthValues["JUL-2026"] !== 7160.3775 ||
+  csvQuotaRow.monthValues["AUG-2026"] !== 0 ||
+  JSON.stringify(csvQuotaRow.monthValues) !== JSON.stringify(xlsxQuotaRow?.monthValues)
+) {
+  throw new Error("Quota CSV month columns did not parse like XLSX month columns.");
+}
+const okrData = createEmptyAppData();
+okrData.quotaRows = parsedQuotaCsv.data;
+okrData.peopleById["245203"] = { ...people, employeeId: "245203", fullName: "Nitya Rao" };
+const okrAudit = buildAuditReport(
+  "AUG-2026",
+  { regions: ["APAC"], lobs: ["LTS"], countries: ["Singapore"] },
+  okrData,
+  { singapore: "APAC" },
+  new Date(2026, 7, 20),
+);
+if (!okrAudit.rows.some((row) => row.employeeId === "245203" && row.auditItem === "OKR Plan End")) {
+  throw new Error("Quota CSV did not produce the expected August OKR Plan End audit row.");
+}
+
+const dashboardActiveScr = {
+  ...scr(people.employeeId, new Date(2020, 0, 1), people.fullName),
+  costCenter: "Standard Cost Center",
+  jobFamily: "SalesQ IC",
+};
+const dashboardTerminatedScr = {
+  ...scr("000089", new Date(2020, 0, 1), "Terminated Employee"),
+  activeStatus: "",
+};
+const baselineWorkbook = buildAuditWorkbook(
+  [],
+  {},
+  expectations,
+  { [people.employeeId]: dashboardActiveScr, [dashboardTerminatedScr.employeeId]: dashboardTerminatedScr },
+);
+const parsedBaseline = await parseVerificationBaselineFile(new File([baselineWorkbook], "initial-output.xlsx"));
+if (
+  parsedBaseline.data.expectations.length !== expectations.length ||
+  parsedBaseline.data.expectations[0]?.employeeId !== people.employeeId
+) {
+  throw new Error("Verification Baseline workbook round trip failed.");
+}
+if (
+  Object.keys(parsedBaseline.data.currentScrById).length !== 1 ||
+  !parsedBaseline.data.currentScrById[people.employeeId] ||
+  parsedBaseline.data.currentScrById[dashboardTerminatedScr.employeeId] ||
+  parsedBaseline.data.currentScrById[people.employeeId]?.costCenter !== dashboardActiveScr.costCenter ||
+  parsedBaseline.data.currentScrById[people.employeeId]?.jobFamily !== dashboardActiveScr.jobFamily
+) {
+  throw new Error("Active SCR Population workbook round trip failed.");
+}
+const dashboardPeopleOnly = { ...people, employeeId: "000090", fullName: "People Only Employee" };
+const dashboard = buildDashboardModel(
+  { [people.employeeId]: dashboardActiveScr, [dashboardTerminatedScr.employeeId]: dashboardTerminatedScr },
+  {
+    [people.employeeId]: { ...people, region: "EMEA", businessUnit: "Incorrect People LOB" },
+    [dashboardTerminatedScr.employeeId]: { ...people, employeeId: dashboardTerminatedScr.employeeId },
+    [dashboardPeopleOnly.employeeId]: dashboardPeopleOnly,
+  },
+  result.rows,
+  { singapore: "APAC" },
+);
+const termSummaryRows = [
+  { ...result.rows[0], verificationId: "term-pending", auditItem: "Termination", progressStatus: "Pending" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "term-partial", auditItem: "Termination", progressStatus: "Partially Completed" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "term-complete", auditItem: "Termination", progressStatus: "Completed" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "term-deferred", auditItem: "Termination", progressStatus: "Deferred" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "other-pending", auditItem: "New Hire", progressStatus: "Pending" as const, region: "APAC" },
+  { ...result.rows[0], verificationId: "emea-term", auditItem: "Termination", progressStatus: "Pending" as const, region: "EMEA" },
+];
+const termModels = Object.fromEntries(["All Regions", "APAC", "EMEA", "LATAM"].map((region) => [
+  region, buildDashboardModel({}, {}, termSummaryRows, {}, region),
+]));
+if (termModels["All Regions"].termUpdatePending !== 3 || termModels.APAC.termUpdatePending !== 2 ||
+  termModels.EMEA.termUpdatePending !== 1 || termModels.LATAM.termUpdatePending !== 0 ||
+  termModels.APAC.setupRequired !== 4 || termModels.APAC.partiallyCompleted !== 1 ||
+  termModels.APAC.pending !== 2 || termModels.APAC.completionRate !== 0.25) {
+  throw new Error("Term Update Pending must be a region-filtered subset without changing existing execution totals.");
+}
+const termHtml = buildDashboardHtml(termModels, "APAC", "JUL-2026");
+if (!termHtml.includes("Term Update Pending</span><strong>2</strong>") ||
+  !(termHtml.indexOf(">Pending</span>") < termHtml.indexOf(">Term Update Pending</span>") &&
+    termHtml.indexOf(">Term Update Pending</span>") < termHtml.indexOf(">Manager Mismatch Only</span>")) ||
+  !termHtml.includes("already included in Partially Completed or Pending")) {
+  throw new Error("HTML summary must place the Term Update Pending card after Pending and explain its overlap.");
+}
+const dashboardHtml = buildDashboardHtml(
+  { "All Regions": dashboard, APAC: { ...dashboard, commissionedEmployees: 7 } },
+  "APAC",
+  "JUL-2026",
+);
+const dashboardScript = dashboardHtml.slice(
+  dashboardHtml.indexOf("<script>") + "<script>".length,
+  dashboardHtml.lastIndexOf("</script>"),
+);
+const dashboardStaticHtml = dashboardHtml.slice(0, dashboardHtml.indexOf("<script>"));
+if (
+  !dashboardStaticHtml.includes('<option value="APAC" selected>APAC</option>') ||
+  !dashboardStaticHtml.includes(">7</strong>") ||
+  !dashboardStaticHtml.includes("Analyst setup ownership") ||
+  !dashboardStaticHtml.includes('id="dashboard-region-0"') ||
+  !dashboardStaticHtml.includes('for="dashboard-region-1"') ||
+  !dashboardStaticHtml.includes("#dashboard-region-1:checked ~ .shell .dashboard-fallback-view-1") ||
+  !dashboardStaticHtml.includes(">1</strong>")
+) {
+  throw new Error("Dashboard HTML did not include usable CSS-only Region fallback views.");
+}
+if (/(?:=>|\?\?|\bconst\b|\blet\b|\.\.\.)/.test(dashboardScript)) {
+  throw new Error("Dashboard HTML runtime includes JavaScript syntax that can fail in older mobile WebViews.");
+}
+const fakeElements = new Map(
+  ["region-filter", "kpis", "snapshot", "print-region", "analyst-table", "region-bars", "lob-bars", "lob-table"].map(
+    (id) => [
+      id,
+      {
+        value: "",
+        innerHTML: "",
+        textContent: "",
+        className: "",
+        options: [] as Array<{ text: string; value: string }>,
+        listeners: {} as Record<string, () => void>,
+        add(option: { text: string; value: string }) {
+          this.options.push(option);
+        },
+        addEventListener(event: string, listener: () => void) {
+          this.listeners[event] = listener;
+        },
+      },
+    ],
+  ),
+);
+fakeElements.get("region-filter")?.options.push(
+  { text: "All Regions", value: "All Regions" },
+  { text: "APAC", value: "APAC" },
+);
+const fakeDocument = {
+  title: "",
+  documentElement: { className: "" },
+  getElementById: (id: string) => fakeElements.get(id),
+};
+Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
+try {
+  new Function(dashboardScript)();
+  const regionFilter = fakeElements.get("region-filter");
+  const kpis = fakeElements.get("kpis");
+  if (regionFilter?.options.length !== 2 || regionFilter.value !== "APAC" || !kpis?.innerHTML.includes(">7</strong>")) {
+    throw new Error("Dashboard HTML did not render the default Region model.");
+  }
+  if (!fakeDocument.documentElement.className.includes("dashboard-js")) {
+    throw new Error("Dashboard HTML did not switch from the CSS fallback to the scripted Region filter.");
+  }
+  regionFilter.value = "All Regions";
+  regionFilter.listeners.change?.();
+  if (!kpis.innerHTML.includes(">1</strong>")) {
+    throw new Error("Dashboard HTML Region filter did not update the KPI values.");
+  }
+} finally {
+  Reflect.deleteProperty(globalThis, "document");
+}
+if (
+  !dashboardHtml.includes('id="region-filter"') ||
+  !dashboardHtml.includes('regionFilter.addEventListener("change", renderDashboard)') ||
+  !dashboardHtml.includes('"All Regions"') ||
+  !dashboardHtml.includes('"APAC"')
+) {
+  throw new Error("Interactive Dashboard HTML export was missing its Region models or filter behavior.");
+}
+if (
+  buildDashboardHtmlFileName("JUL-2026", new Date(2026, 6, 29, 12, 18, 15)) !==
+  "Participant_Setup_Dashboard_JUL-2026_20260729_121815.html"
+) {
+  throw new Error("Dashboard HTML download filename was incorrect.");
+}
+if (dashboard.commissionedEmployees !== 1 || dashboard.setupRequired !== 2 || dashboard.managerMismatchOnly !== 1) {
+  throw new Error("Dashboard did not use current SCR Active Status for the commissioned population.");
+}
+if (dashboard.byRegion.find((row) => row.label === "APAC")?.employees !== 1) {
+  throw new Error("Dashboard Region breakdown did not use the current SCR country mapping.");
+}
+if (dashboard.byLob.find((row) => row.label === "LSS")?.employees !== 1) {
+  throw new Error("Dashboard LOB breakdown did not apply the SCR LOB mapping.");
+}
+if (dashboard.completed !== 1 || dashboard.partiallyCompleted !== 1) {
+  throw new Error("Dashboard verification metrics did not reconcile.");
+}
+if (dashboard.setupRequiredRate !== 2) {
+  throw new Error("Dashboard Setup Required rate did not use Setup Required divided by Commissioned Employees.");
+}
+if (dashboard.completionRate !== 0.5) {
+  throw new Error("Dashboard Completion Rate included Manager Mismatch Only in its denominator.");
+}
+if (buildDashboardModel({}, {}, [], {}).setupRequiredRate !== 0) {
+  throw new Error("Dashboard Setup Required rate did not handle an empty commissioned population.");
+}
+
+const lobMappingCases = [
+  {
+    employeeId: "000091",
+    costCenter: "NAMER GCP Enterprise",
+    jobFamily: "Sales Development Representative",
+    businessUnit: "Advertising Sales",
+    peopleBusinessUnit: "TS",
+  },
+  {
+    employeeId: "000092",
+    costCenter: "",
+    jobFamily: "Sales Development Manager",
+    businessUnit: "Advertising Sales",
+    peopleBusinessUnit: "MS",
+  },
+  {
+    employeeId: "000093",
+    costCenter: "",
+    jobFamily: "SalesQ IC",
+    businessUnit: "Advertising Operations",
+    peopleBusinessUnit: "TS",
+  },
+  {
+    employeeId: "000094",
+    costCenter: "",
+    jobFamily: "SalesQ IC",
+    businessUnit: "LCS Operations",
+    peopleBusinessUnit: "MS",
+  },
+  {
+    employeeId: "000095",
+    costCenter: "",
+    jobFamily: "SalesQ IC",
+    businessUnit: "Sales Solutions Operations",
+    peopleBusinessUnit: "MS",
+  },
+  {
+    employeeId: "000096",
+    costCenter: "",
+    jobFamily: "SalesQ IC",
+    businessUnit: "Global Sales Operations",
+    peopleBusinessUnit: "MS",
+  },
+  {
+    employeeId: "000097",
+    costCenter: "",
+    jobFamily: "SalesQ VP",
+    businessUnit: "Global Sales Operations",
+    peopleBusinessUnit: "MS",
+  },
+  {
+    employeeId: "000098",
+    costCenter: "",
+    jobFamily: "Engineering",
+    businessUnit: "Other",
+    peopleBusinessUnit: "TS",
+  },
+  {
+    employeeId: "000099",
+    costCenter: "",
+    jobFamily: "Engineering",
+    businessUnit: "Other",
+    peopleBusinessUnit: "MS",
+  },
+];
+const lobScrById: Record<string, ScrRecord> = {};
+const lobPeopleById: Record<string, PeopleRecord> = {};
+for (const item of lobMappingCases) {
+  lobScrById[item.employeeId] = {
+    ...scr(item.employeeId, new Date(2020, 0, 1), `LOB Employee ${item.employeeId}`),
+    costCenter: item.costCenter,
+    jobFamily: item.jobFamily,
+    businessUnit: item.businessUnit,
+  };
+  lobPeopleById[item.employeeId] = {
+    ...people,
+    employeeId: item.employeeId,
+    fullName: `LOB Employee ${item.employeeId}`,
+    businessUnit: item.peopleBusinessUnit,
+  };
+}
+const lobDashboard = buildDashboardModel(lobScrById, lobPeopleById, [], { singapore: "APAC" });
+const expectedLobCounts = { GCP: 1, SD: 2, LMS: 2, LTS: 2, LSS: 1, Global: 1 };
+for (const [lob, expected] of Object.entries(expectedLobCounts)) {
+  if (lobDashboard.byLob.find((row) => row.label === lob)?.employees !== expected) {
+    throw new Error(`LOB mapping failed for ${lob}.`);
+  }
+}
+
+const inferenceData = createEmptyAppData();
+const secondPeople = {
+  ...people,
+  employeeId: "000082",
+  fullName: "Second Employee",
+  analystName: "Manager Analyst",
+};
+const managerPeople = {
+  ...people,
+  employeeId: "123456",
+  fullName: "Manager",
+  analystName: "Manager Analyst",
+};
+const historicalNewHirePeople = {
+  ...people,
+  employeeId: "000083",
+  fullName: "New Employee",
+  analystName: "Historical Analyst",
+};
+inferenceData.peopleById = {
+  [people.employeeId]: people,
+  [secondPeople.employeeId]: secondPeople,
+  [managerPeople.employeeId]: managerPeople,
+  [historicalNewHirePeople.employeeId]: historicalNewHirePeople,
+};
+inferenceData.currentScrById = {
+  [people.employeeId]: scr(people.employeeId, new Date(2020, 0, 1), people.fullName),
+  [secondPeople.employeeId]: scr(secondPeople.employeeId, new Date(2020, 0, 1), secondPeople.fullName),
+  "000083": scr("000083", new Date(2026, 6, 10), "New Employee"),
+  "000084": scr("000084", new Date(2026, 6, 10), "Regional Employee", "Australia"),
+};
+inferenceData.previousScrById = {
+  [people.employeeId]: inferenceData.currentScrById[people.employeeId],
+  [secondPeople.employeeId]: inferenceData.currentScrById[secondPeople.employeeId],
+};
+inferenceData.positionById["000083"] = {
+  employeeId: "000083",
+  positionName: "New Employee (000083)",
+  personName: "New Employee (000083)",
+  title: "Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2026, 6, 10),
+};
+inferenceData.positionById["000084"] = {
+  ...inferenceData.positionById["000083"],
+  employeeId: "000084",
+  positionName: "Regional Employee (000084)",
+  personName: "Regional Employee (000084)",
+};
+const inferredAudit = buildAuditReport(
+  "JUL-2026",
+  { regions: ["APAC"], lobs: ["LSS"], countries: ["Australia", "Singapore"] },
+  inferenceData,
+  { australia: "APAC", singapore: "APAC" },
+  new Date(2026, 6, 16),
+);
+const inferredExpectation = inferredAudit.expectations.find((item) => item.employeeId === "000083");
+const inferredAuditRow = inferredAudit.rows.find((item) => item.employeeId === "000083");
+if (
+  inferredAuditRow?.analystName !== managerPeople.analystName ||
+  inferredAuditRow.inferenceBasis !== "Country + LOB + Manager | Manager match | n=2" ||
+  inferredAuditRow.previousJobLevelGrade !== "" ||
+  inferredAuditRow.currentJobLevelGrade !== "IC3 (08.2)" ||
+  inferredExpectation?.analystName !== managerPeople.analystName ||
+  inferredExpectation.analystSource !== "Inferred: Country + LOB + Manager" ||
+  inferredExpectation.analystConfidence !== "Manager match" ||
+  inferredExpectation.analystSampleSize !== 2
+) {
+  throw new Error("New Hire analyst inference did not prefer the manager's Analyst from multiple candidates.");
+}
+const regionalExpectation = inferredAudit.expectations.find((item) => item.employeeId === "000084");
+const regionalAuditRow = inferredAudit.rows.find((item) => item.employeeId === "000084");
+if (
+  regionalAuditRow?.inferenceBasis !== "Region + LOB + Manager | Manager match | n=2" ||
+  regionalExpectation?.analystName !== managerPeople.analystName ||
+  regionalExpectation.analystSource !== "Inferred: Region + LOB + Manager"
+) {
+  throw new Error("Region + LOB analyst fallback did not prefer the manager's Analyst from multiple candidates.");
+}
+const inferenceDashboard = buildDashboardModel(
+  inferenceData.currentScrById,
+  inferenceData.peopleById,
+  buildFollowUpVerification(inferredAudit.expectations, inferenceData.peopleById).rows,
+  { australia: "APAC", singapore: "APAC" },
+  "APAC",
+);
+if (
+  inferenceDashboard.commissionedEmployees !== 4 ||
+  inferenceDashboard.byAnalyst.find((row) => row.label === managerPeople.analystName)?.employees !== 3 ||
+  inferenceDashboard.byAnalyst.find((row) => row.label === people.analystName)?.employees !== 1 ||
+  inferenceDashboard.byAnalyst.some((row) => row.label === historicalNewHirePeople.analystName && row.employees > 0)
+) {
+  throw new Error("SCR-based Dashboard did not retain inferred Analyst ownership for commissioned employees.");
+}
+const inferredWorkbookBuffer = buildAuditWorkbook(
+  inferredAudit.rows,
+  {},
+  inferredAudit.expectations,
+  inferenceData.currentScrById,
+);
+const inferredWorkbook = XLSX.read(inferredWorkbookBuffer, { type: "array", cellStyles: true });
+const inferredReportSheet = inferredWorkbook.Sheets["Audit Report"];
+const inferredReportRows = XLSX.utils.sheet_to_json<string[]>(inferredReportSheet, { header: 1, defval: "" });
+const inferredHeaders = inferredReportRows[0] ?? [];
+const inferredRowIndex = inferredReportRows.findIndex(
+  (row) => String(row[inferredHeaders.indexOf("Employee ID")]) === "000083",
+);
+const inferredAnalystCell = inferredReportSheet[
+  XLSX.utils.encode_cell({ r: inferredRowIndex, c: inferredHeaders.indexOf("Analyst") })
+] as { s?: { patternType?: string; fgColor?: { rgb?: string } } } | undefined;
+if (inferredAnalystCell?.s?.patternType !== "solid" || inferredAnalystCell.s.fgColor?.rgb !== "FFF2CC") {
+  throw new Error("Inferred Analyst Name cells are not highlighted light yellow in Audit Excel.");
+}
+const inferredColumnInfo = inferredReportSheet["!cols"] ?? [];
+if (
+  inferredHeaders.length !== 50 ||
+  inferredHeaders.slice(0, 10).join("|") !==
+    "Analyst|Employee ID|Employee name|Audit item|Audit subcategory|Change summary|WCR effective date|Country|LOB|Currently on LOA" ||
+  inferredColumnInfo.filter((column) => column?.hidden).length !== 34 ||
+  inferredColumnInfo[10]?.hidden ||
+  inferredColumnInfo.slice(11, 13).some((column) => !column?.hidden) ||
+  inferredColumnInfo.slice(14, 21).some((column) => !column?.hidden) ||
+  inferredColumnInfo.slice(22, 31).some((column) => !column?.hidden) ||
+  Math.max(...inferredColumnInfo.map((column) => column?.level ?? 0)) !== 2
+) {
+  throw new Error("Audit Excel did not retain the requested initial detail group state.");
+}
+const inferredSheetXml = strFromU8(unzipSync(new Uint8Array(inferredWorkbookBuffer))["xl/worksheets/sheet1.xml"]);
+if (!/pane[^>]*xSplit="3"[^>]*ySplit="1"[^>]*topLeftCell="D2"[^>]*state="frozen"/.test(inferredSheetXml)) {
+  throw new Error("Audit Excel did not freeze the header row and three identifying columns.");
+}
+if (/\slevel="/.test(inferredSheetXml) || !/\soutlineLevel="[12]"/.test(inferredSheetXml)) {
+  throw new Error("Audit Excel column groups were not serialized with valid OOXML outline attributes.");
+}
+for (const column of [11, 14, 22, 32, 39, 44]) {
+  const summaryColumn = inferredSheetXml.match(new RegExp(`<col[^>]*min="${column}"[^>]*/>`))?.[0] ?? "";
+  if (!/collapsed="1"/.test(summaryColumn) || /hidden="true"/.test(summaryColumn)) {
+    throw new Error(`Audit Excel detail group at column ${column} did not open collapsed with a visible summary column.`);
+  }
+}
+
+const filters = { regions: ["APAC"], lobs: ["LSS"], countries: ["Singapore"] };
+const countryToRegion = { singapore: "APAC" };
+
+const recommendationData = createEmptyAppData();
+const recommendationRecords = [
+  {
+    employeeId: "000120",
+    name: "Country Change Employee",
+    previousCountry: "Singapore",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Current Analyst",
+  },
+  {
+    employeeId: "000121",
+    name: "Same LOB Employee",
+    previousCountry: "Singapore",
+    currentCountry: "Singapore",
+    previousBusinessUnit: "Advertising Sales",
+    currentBusinessUnit: "Advertising Operations",
+    analystName: "LMS Analyst",
+  },
+  {
+    employeeId: "000122",
+    name: "No Match Employee",
+    previousCountry: "Singapore",
+    currentCountry: "Germany",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Current Analyst",
+  },
+  {
+    employeeId: "000123",
+    name: "Australia Peer One",
+    previousCountry: "Australia",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Australia Analyst",
+  },
+  {
+    employeeId: "000124",
+    name: "Australia Peer Two",
+    previousCountry: "Australia",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Australia Analyst",
+  },
+  {
+    employeeId: "000125",
+    name: "Australia Manager Peer",
+    previousCountry: "Australia",
+    currentCountry: "Australia",
+    previousBusinessUnit: "Sales Solutions",
+    currentBusinessUnit: "Sales Solutions",
+    analystName: "Manager Analyst",
+  },
+];
+for (const record of recommendationRecords) {
+  const previous = {
+    ...scr(record.employeeId, new Date(2020, 0, 1), record.name, record.previousCountry),
+    businessUnit: record.previousBusinessUnit,
+  };
+  recommendationData.previousScrById[record.employeeId] = previous;
+  recommendationData.currentScrById[record.employeeId] = {
+    ...previous,
+    country: record.currentCountry,
+    businessUnit: record.currentBusinessUnit,
+  };
+  recommendationData.peopleById[record.employeeId] = {
+    ...people,
+    employeeId: record.employeeId,
+    fullName: record.name,
+    country: record.previousCountry,
+    analystName: record.analystName,
+  };
+  recommendationData.positionById[record.employeeId] = {
+    employeeId: record.employeeId,
+    positionName: `${record.name} (${record.employeeId})`,
+    personName: `${record.name} (${record.employeeId})`,
+    title: "Account Executive",
+    businessGroup: "Sales",
+    effectiveStartDate: new Date(2020, 0, 1),
+  };
+}
+recommendationData.peopleById["123456"] = {
+  ...people,
+  employeeId: "123456",
+  fullName: "Manager",
+  analystName: "Manager Analyst",
+};
+const recommendationRegionMap = { australia: "APAC", germany: "EMEA", singapore: "APAC" };
+const recommendationAudit = buildAuditReport(
+  "JUL-2026",
+  { regions: ["APAC", "EMEA"], lobs: ["LMS", "LSS"], countries: ["Australia", "Germany", "Singapore"] },
+  recommendationData,
+  recommendationRegionMap,
+  new Date(2026, 6, 16),
+);
+const countryChangeRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000120");
+if (
+  countryChangeRecommendation?.analystName !== "Current Analyst" ||
+  countryChangeRecommendation.inferredAnalystName !== "Manager Analyst" ||
+  countryChangeRecommendation.analystReview !== "Change Suggested" ||
+  countryChangeRecommendation.inferenceBasis !== "Country + LOB + Manager | Manager match | n=3"
+) {
+  throw new Error("Country change did not prefer the manager's Analyst from multiple candidates.");
+}
+const sameLobRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000121");
+if (
+  sameLobRecommendation?.inferredAnalystName !== "" ||
+  sameLobRecommendation.analystReview !== "No Routing Change" ||
+  sameLobRecommendation.inferenceBasis !== "Country + derived LOB unchanged"
+) {
+  throw new Error("A Business Unit change within the same derived LOB was not marked No Routing Change.");
+}
+const noMatchRecommendation = recommendationAudit.rows.find((row) => row.employeeId === "000122");
+if (
+  noMatchRecommendation?.inferredAnalystName !== "Unassigned" ||
+  noMatchRecommendation.analystReview !== "Ambiguous / Unassigned"
+) {
+  throw new Error("An Analyst recommendation without a unique peer match was not marked Ambiguous / Unassigned.");
+}
+const recommendationVerification = buildFollowUpVerification(
+  recommendationAudit.expectations,
+  recommendationData.peopleById,
+  new Date(2026, 6, 22),
+);
+const countryChangeVerification = recommendationVerification.rows.find((row) => row.employeeId === "000120");
+if (
+  countryChangeVerification?.inferredAnalystName !== "Manager Analyst" ||
+  countryChangeVerification.analystReview !== "Change Suggested" ||
+  countryChangeVerification.inferenceBasis !== "Country + LOB + Manager | Manager match | n=3"
+) {
+  throw new Error("Verification did not retain the initial Analyst recommendation.");
+}
+const recommendationWorkbook = XLSX.read(
+  buildAuditWorkbook(
+    recommendationAudit.rows,
+    {},
+    recommendationAudit.expectations,
+    recommendationData.currentScrById,
+  ),
+  { type: "array", cellStyles: true },
+);
+const recommendationSheet = recommendationWorkbook.Sheets["Audit Report"];
+const recommendationRows = XLSX.utils.sheet_to_json<string[]>(recommendationSheet, { header: 1, defval: "" });
+const recommendationHeaders = recommendationRows[0] ?? [];
+const recommendationRowIndex = recommendationRows.findIndex(
+  (row) => String(row[recommendationHeaders.indexOf("Employee ID")]) === "000120",
+);
+const recommendationCell = recommendationSheet[
+  XLSX.utils.encode_cell({ r: recommendationRowIndex, c: recommendationHeaders.indexOf("Inferred Analyst Name") })
+] as { s?: { patternType?: string; fgColor?: { rgb?: string } } } | undefined;
+if (recommendationCell?.s?.patternType !== "solid" || recommendationCell.s.fgColor?.rgb !== "FFF2CC") {
+  throw new Error("Inferred Analyst Name cells are not highlighted light yellow in Audit Excel.");
+}
+const recommendationDashboard = buildDashboardModel(
+  recommendationData.currentScrById,
+  recommendationData.peopleById,
+  recommendationVerification.rows,
+  recommendationRegionMap,
+  "APAC",
+);
+if (recommendationDashboard.byAnalyst.find((row) => row.label === "Australia Analyst")?.employees !== 2) {
+  throw new Error("Existing-participant recommendations incorrectly replaced actual Dashboard Analyst ownership.");
+}
+
+const transferOutEmployeeId = "000087";
+const terminatedEmployeeId = "000088";
+const statusData = createEmptyAppData();
+statusData.previousScrById[transferOutEmployeeId] = scr(
+  transferOutEmployeeId,
+  new Date(2020, 0, 1),
+  "Transfer Out Employee",
+);
+statusData.previousScrById[terminatedEmployeeId] = scr(
+  terminatedEmployeeId,
+  new Date(2020, 0, 1),
+  "Terminated Employee",
+);
+statusData.currentScrById[terminatedEmployeeId] = {
+  ...statusData.previousScrById[terminatedEmployeeId],
+  activeStatus: "",
+  terminationDate: new Date(2026, 6, 10),
+};
+statusData.peopleById[transferOutEmployeeId] = {
+  ...people,
+  employeeId: transferOutEmployeeId,
+  fullName: "Transfer Out Employee",
+};
+statusData.peopleById[terminatedEmployeeId] = {
+  ...people,
+  employeeId: terminatedEmployeeId,
+  fullName: "Terminated Employee",
+};
+const statusAudit = buildAuditReport("JUL-2026", filters, statusData, countryToRegion, new Date(2026, 6, 16));
+if (statusAudit.rows.find((row) => row.employeeId === transferOutEmployeeId)?.auditItem !== "Transfer to Non-Sales") {
+  throw new Error("An employee missing from the current SCR was not classified as Transfer to Non-Sales.");
+}
+if (statusAudit.rows.find((row) => row.employeeId === terminatedEmployeeId)?.auditItem !== "Termination") {
+  throw new Error("A blank current SCR Active Status was not classified as Termination.");
+}
+
+const terminationExpectations = statusAudit.expectations.filter((item) => item.employeeId === terminatedEmployeeId);
+for (const [date, matched] of [[new Date(2026, 6, 10), true], [new Date(2026, 7, 1), true],
+  [new Date(2026, 6, 9), true], [new Date(2026, 0, 11), true],
+  [new Date(2026, 0, 10), false], [new Date(2026, 0, 9), false], [null, false]] as const) {
+  const verification = buildFollowUpVerification(terminationExpectations, {
+    [terminatedEmployeeId]: { ...statusData.peopleById[terminatedEmployeeId], employeeStatus: "Terminated", terminationDate: date },
+  });
+  if (verification.fieldResults.find((item) => item.fieldKey === "terminationDate")?.matched !== (matched ? "Yes" : "No") ||
+    verification.rows[0]?.progressStatus !== (matched ? "Completed" : "Partially Completed")) {
+    throw new Error("Termination date must be present and strictly later than six calendar months before the SCR date.");
+  }
+}
+for (const [expectedDate, actualDate, matched] of [
+  ["2026-08-31", new Date(2026, 1, 28), false],
+  ["2026-08-31", new Date(2026, 2, 1), true],
+  ["2024-08-31", new Date(2024, 1, 29), false],
+  ["2024-08-31", new Date(2024, 2, 1), true],
+] as const) {
+  const verification = buildFollowUpVerification(
+    terminationExpectations.map((item) => item.fieldKey === "terminationDate" ? { ...item, expectedValue: expectedDate } : item),
+    { [terminatedEmployeeId]: { ...statusData.peopleById[terminatedEmployeeId], employeeStatus: "Terminated", terminationDate: actualDate } },
+  );
+  if (verification.rows[0]?.progressStatus !== (matched ? "Completed" : "Partially Completed")) {
+    throw new Error("Six-month termination cutoff must clamp to the last day of February, including leap years.");
+  }
+}
+const terminationFallbackData = structuredClone(statusData);
+terminationFallbackData.previousScrById[terminatedEmployeeId].terminationDate = new Date(2026, 6, 8);
+const terminationPriorityAudit = buildAuditReport("JUL-2026", filters, terminationFallbackData, countryToRegion);
+if (terminationPriorityAudit.expectations.find((item) => item.fieldKey === "terminationDate")?.expectedValue !== "2026-07-10") {
+  throw new Error("Termination verification must prefer the current SCR date.");
+}
+terminationFallbackData.currentScrById[terminatedEmployeeId].terminationDate = null;
+const terminationFallbackAudit = buildAuditReport("JUL-2026", filters, terminationFallbackData, countryToRegion);
+if (terminationFallbackAudit.expectations.find((item) => item.fieldKey === "terminationDate")?.expectedValue !== "2026-07-08") {
+  throw new Error("Termination verification must use the previous SCR date when the current date is blank.");
+}
+
+const changedEmployeeId = "000111";
+const changeData = createEmptyAppData();
+changeData.previousScrById[changedEmployeeId] = scr(changedEmployeeId, new Date(2020, 0, 1), "Changed Employee");
+changeData.currentScrById[changedEmployeeId] = {
+  ...changeData.previousScrById[changedEmployeeId],
+  jobTitle: "Senior Account Executive",
+  jobLevel: "IC4",
+  jobGrade: "09.1",
+  commissionAmount: 75,
+};
+changeData.peopleById[changedEmployeeId] = { ...people, employeeId: changedEmployeeId, fullName: "Changed Employee" };
+changeData.workerChangesById = parsedWorkerChangeCsv.data;
+changeData.positionById[changedEmployeeId] = {
+  employeeId: changedEmployeeId,
+  positionName: "Changed Employee (000111)",
+  personName: "Changed Employee (000111)",
+  title: "Senior Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2020, 0, 1),
+};
+const changeAudit = buildAuditReport("JUL-2026", filters, changeData, countryToRegion, new Date(2026, 6, 16));
+const changeRow = changeAudit.rows.find((row) => row.employeeId === changedEmployeeId);
+if (
+  changeRow?.auditItem !== "Change to Existing Participant" ||
+  changeRow.auditSubcategory !== "Promotion + Variable Change" ||
+  changeRow.wcrEffectiveDate !== "2026-07-10" ||
+  changeRow.previousJobLevelGrade !== "IC3 (08.2)" ||
+  changeRow.currentJobLevelGrade !== "IC4 (09.1)" ||
+  changeRow.peopleAnnualVariable !== 50 ||
+  changeRow.variableCompensationGap !== 25 ||
+  !changeRow.changeSummary.includes("SCR Commission Amount 75 vs People Annual Variable 50 (Gap +25)") ||
+  changeAudit.expectations.some((item) => item.auditSubcategory !== "Promotion + Variable Change")
+) {
+  throw new Error("Audit did not retain the promotion classification or merge the SCR-to-People Variable gap.");
+}
+const changeWorkbook = XLSX.read(
+  buildAuditWorkbook(changeAudit.rows, {}, changeAudit.expectations, changeData.currentScrById),
+  { type: "array" },
+);
+const changeWorkbookRows = XLSX.utils.sheet_to_json<Record<string, string>>(changeWorkbook.Sheets["Audit Report"], {
+  defval: "",
+});
+if (
+  changeWorkbookRows[0]?.["WCR effective date"] !== "2026-07-10" ||
+  changeWorkbookRows[0]?.["Previous Job Level Grade"] !== "IC3 (08.2)" ||
+  changeWorkbookRows[0]?.["Current Job Level Grade"] !== "IC4 (09.1)" ||
+  Number(changeWorkbookRows[0]?.["People Annual Variable"]) !== 50 ||
+  Number(changeWorkbookRows[0]?.["Variable Compensation Gap"]) !== 25
+) {
+  throw new Error("Audit Excel did not retain the career movement and Variable reconciliation values.");
+}
+const changeVerification = buildFollowUpVerification(
+  changeAudit.expectations,
+  {
+    [changedEmployeeId]: {
+      ...people,
+      employeeId: changedEmployeeId,
+      fullName: "Changed Employee",
+      hrJobTitle: "Senior Account Executive",
+      annualVariable: 75,
+    },
+  },
+  new Date(2026, 6, 22),
+);
+if (
+  changeVerification.rows[0]?.auditSubcategory !== "Promotion + Variable Change" ||
+  changeVerification.rows[0]?.wcrEffectiveDate !== "2026-07-10"
+) {
+  throw new Error("Verification Report did not retain the audit subcategory and WCR Effective Date.");
+}
+
+const variableMismatchData = createEmptyAppData();
+const variableMismatchCases = [
+  { employeeId: "000130", name: "Positive Gap", commissionAmount: 60, peopleAnnualVariable: 50 },
+  { employeeId: "000131", name: "Below Threshold", commissionAmount: 59, peopleAnnualVariable: 50 },
+  { employeeId: "000132", name: "Negative Gap", commissionAmount: 40, peopleAnnualVariable: 50 },
+];
+for (const item of variableMismatchCases) {
+  const current = {
+    ...scr(item.employeeId, new Date(2020, 0, 1), item.name),
+    commissionAmount: item.commissionAmount,
+  };
+  variableMismatchData.previousScrById[item.employeeId] = current;
+  variableMismatchData.currentScrById[item.employeeId] = { ...current };
+  variableMismatchData.peopleById[item.employeeId] = {
+    ...people,
+    employeeId: item.employeeId,
+    fullName: item.name,
+    annualVariable: item.peopleAnnualVariable,
+  };
+  variableMismatchData.positionById[item.employeeId] = {
+    employeeId: item.employeeId,
+    positionName: `${item.name} (${item.employeeId})`,
+    personName: `${item.name} (${item.employeeId})`,
+    title: current.jobTitle,
+    businessGroup: "Sales",
+    effectiveStartDate: new Date(2020, 0, 1),
+  };
+}
+const variableMismatchAudit = buildAuditReport(
+  "JUL-2026",
+  filters,
+  variableMismatchData,
+  countryToRegion,
+  new Date(2026, 6, 16),
+);
+const positiveGapRow = variableMismatchAudit.rows.find((row) => row.employeeId === "000130");
+const negativeGapRow = variableMismatchAudit.rows.find((row) => row.employeeId === "000132");
+if (
+  positiveGapRow?.auditItem !== "Variable Compensation Mismatch" ||
+  positiveGapRow.auditSubcategory !== "Variable Mismatch Only" ||
+  positiveGapRow.variableCompensationGap !== 10 ||
+  negativeGapRow?.variableCompensationGap !== -10 ||
+  variableMismatchAudit.rows.some((row) => row.employeeId === "000131")
+) {
+  throw new Error("Variable mismatch audit did not enforce the inclusive +/-10 materiality threshold.");
+}
+if (
+  variableMismatchAudit.expectations.length !== 2 ||
+  variableMismatchAudit.expectations.some(
+    (item) => item.fieldKey !== "annualVariable" || item.auditItem !== "Variable Compensation Mismatch",
+  )
+) {
+  throw new Error("Variable mismatch did not create one Annual Variable verification expectation per material gap.");
+}
+const variableToleranceVerification = buildFollowUpVerification(
+  variableMismatchAudit.expectations,
+  {
+    "000130": { ...variableMismatchData.peopleById["000130"], annualVariable: 51 },
+    "000132": { ...variableMismatchData.peopleById["000132"], annualVariable: 30 },
+  },
+  new Date(2026, 6, 22),
+);
+if (
+  variableToleranceVerification.rows.find((row) => row.employeeId === "000130")?.progressStatus !== "Completed" ||
+  variableToleranceVerification.rows.find((row) => row.employeeId === "000132")?.progressStatus !== "Pending"
+) {
+  throw new Error("Annual Variable verification did not treat gaps below 10 as complete and gaps of 10 as pending.");
+}
+
+// Exercise the exported baseline, follow-up workbook, and shared manager summary path.
+const loaMismatchData = structuredClone(variableMismatchData);
+for (const employeeId of ["000130", "000132"]) {
+  loaMismatchData.currentScrById[employeeId].onLeave = "Yes";
+  loaMismatchData.previousScrById[employeeId].onLeave = "Yes";
+  loaMismatchData.peopleById[employeeId].employeeStatus = "LOA";
+}
+const loaMismatchAudit = buildAuditReport("JUL-2026", filters, loaMismatchData, countryToRegion);
+if (loaMismatchAudit.rows.length !== 2 || loaMismatchAudit.rows.some((row) =>
+  row.auditItem !== "Deferred Change While on LOA" || row.auditSubcategory !== "Variable Mismatch Only" ||
+  row.currentOnLeave !== "Yes")) {
+  throw new Error("LOA-only Variable mismatches must be classified as deferred in the Audit Report.");
+}
+const loaMismatchBuffer = buildAuditWorkbook(
+  loaMismatchAudit.rows, {}, loaMismatchAudit.expectations, loaMismatchData.currentScrById,
+);
+const loaMismatchWorkbook = XLSX.read(loaMismatchBuffer, { type: "array" });
+const loaMismatchExcelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(loaMismatchWorkbook.Sheets["Audit Report"]);
+if (loaMismatchExcelRows.some((row) => !Object.values(row).includes("Deferred Change While on LOA"))) {
+  throw new Error("Audit Excel lost the deferred classification.");
+}
+const loaMismatchBaseline = await parseVerificationBaselineFile(new File([loaMismatchBuffer], "loa-audit.xlsx"));
+if (loaMismatchBaseline.data.expectations.length !== 2 || loaMismatchBaseline.data.expectations.some((item) =>
+  item.deferred !== "Yes" || item.fieldKey !== "annualVariable")) {
+  throw new Error("LOA Variable mismatch baseline must retain deferred Annual Variable expectations.");
+}
+const loaMismatchVerification = buildFollowUpVerification(
+  loaMismatchBaseline.data.expectations, loaMismatchData.peopleById, new Date(2026, 11, 31),
+);
+if (loaMismatchVerification.rows.some((row) => row.progressStatus !== "Deferred" || row.slaStatus !== "Not Applicable")) {
+  throw new Error("Unresolved LOA Variable mismatches must stay Deferred without an overdue SLA.");
+}
+const loaVerificationWorkbook = XLSX.read(buildFollowUpWorkbook(loaMismatchVerification, {}), { type: "array" });
+const loaVerificationExcelRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(loaVerificationWorkbook.Sheets["Verification Report"]);
+const loaVerificationSummary = XLSX.utils.sheet_to_json<Record<string, unknown>>(loaVerificationWorkbook.Sheets.Summary);
+if (loaVerificationExcelRows.some((row) => row.progressStatus !== "Deferred") ||
+  !loaVerificationSummary.some((row) => row.Name === "Deferred" && row.Value === 2)) {
+  throw new Error("Verification Excel and Summary must retain the Deferred status and count.");
+}
+const loaMismatchDashboard = buildDashboardModel(
+  loaMismatchBaseline.data.currentScrById, loaMismatchData.peopleById,
+  [...result.rows, ...loaMismatchVerification.rows], countryToRegion,
+);
+if (loaMismatchDashboard.setupRequired !== 2 || loaMismatchDashboard.completionRate !== 0.5 ||
+  loaMismatchDashboard.pending !== 0 ||
+  loaMismatchDashboard.byAnalyst.reduce((total, row) => total + row.required, 0) !== 2) {
+  throw new Error("Deferred Variable mismatches must not reduce the manager summary completion rate.");
+}
+// A fresh audit after return to work must make an unresolved mismatch actionable again.
+for (const employeeId of ["000130", "000132"]) {
+  loaMismatchData.currentScrById[employeeId].onLeave = "";
+}
+const returnedMismatchAudit = buildAuditReport("JUL-2026", filters, loaMismatchData, countryToRegion);
+const returnedMismatchVerification = buildFollowUpVerification(returnedMismatchAudit.expectations, loaMismatchData.peopleById);
+if (returnedMismatchAudit.expectations.some((item) => item.deferred === "Yes") ||
+  returnedMismatchVerification.rows.some((row) => row.progressStatus !== "Pending") ||
+  summarizeSetupExecution(returnedMismatchVerification.rows).setupRequired !== 2) {
+  throw new Error("Outstanding Variable mismatches must re-enter setup execution after SCR confirms LOA return.");
+}
+
+const careerMovementCases: Array<{
+  name: string;
+  previous: Partial<ScrRecord>;
+  current: Partial<ScrRecord>;
+  expectedSubcategory: string;
+}> = [
+  {
+    name: "higher grade with variable change",
+    previous: { jobLevel: "IC3", jobGrade: "08.2", commissionAmount: 50 },
+    current: { jobLevel: "IC4", jobGrade: "09.1", commissionAmount: 75 },
+    expectedSubcategory: "Promotion + Variable Change",
+  },
+  {
+    name: "same-grade IC to manager",
+    previous: { jobLevel: "IC3", jobGrade: "08.2" },
+    current: { jobLevel: "MR2", jobGrade: "08.2" },
+    expectedSubcategory: "Promotion - No Variable Change",
+  },
+  {
+    name: "same-grade IC to SP",
+    previous: { jobLevel: "IC1", jobGrade: "06" },
+    current: { jobLevel: "SP4", jobGrade: "06" },
+    expectedSubcategory: "Job Change - No Variable Change",
+  },
+  {
+    name: "lower grade",
+    previous: { jobLevel: "IC4", jobGrade: "09.1" },
+    current: { jobLevel: "IC3", jobGrade: "08.2" },
+    expectedSubcategory: "Job Change - No Variable Change",
+  },
+  {
+    name: "unknown grade",
+    previous: { jobLevel: "IC3", jobGrade: "B" },
+    current: { jobLevel: "IC4", jobGrade: "C" },
+    expectedSubcategory: "Job Change - No Variable Change",
+  },
+];
+for (const [index, testCase] of careerMovementCases.entries()) {
+  const employeeId = `0002${index + 10}`;
+  const movementData = createEmptyAppData();
+  const previousRecord = {
+    ...scr(employeeId, new Date(2020, 0, 1), `Career Case ${index}`),
+    ...testCase.previous,
+  };
+  movementData.previousScrById[employeeId] = previousRecord;
+  movementData.currentScrById[employeeId] = { ...previousRecord, ...testCase.current };
+  movementData.peopleById[employeeId] = { ...people, employeeId, fullName: `Career Case ${index}` };
+  movementData.positionById[employeeId] = {
+    employeeId,
+    positionName: `Career Case ${index} (${employeeId})`,
+    personName: `Career Case ${index} (${employeeId})`,
+    title: movementData.currentScrById[employeeId].jobTitle,
+    businessGroup: "Sales",
+    effectiveStartDate: new Date(2020, 0, 1),
+  };
+  const movementAudit = buildAuditReport("JUL-2026", filters, movementData, countryToRegion, new Date(2026, 6, 16));
+  const movementRow = movementAudit.rows.find((row) => row.employeeId === employeeId);
+  if (movementRow?.auditSubcategory !== testCase.expectedSubcategory) {
+    throw new Error(
+      `${testCase.name} classified as ${movementRow?.auditSubcategory || "no row"}; expected ${testCase.expectedSubcategory}.`,
+    );
+  }
+}
+
+const gradeOnlyEmployeeId = "000299";
+const gradeOnlyData = createEmptyAppData();
+gradeOnlyData.previousScrById[gradeOnlyEmployeeId] = scr(
+  gradeOnlyEmployeeId,
+  new Date(2020, 0, 1),
+  "Grade Only Employee",
+);
+gradeOnlyData.currentScrById[gradeOnlyEmployeeId] = {
+  ...gradeOnlyData.previousScrById[gradeOnlyEmployeeId],
+  jobGrade: "09.1",
+};
+gradeOnlyData.peopleById[gradeOnlyEmployeeId] = {
+  ...people,
+  employeeId: gradeOnlyEmployeeId,
+  fullName: "Grade Only Employee",
+};
+gradeOnlyData.positionById[gradeOnlyEmployeeId] = {
+  employeeId: gradeOnlyEmployeeId,
+  positionName: "Grade Only Employee (000299)",
+  personName: "Grade Only Employee (000299)",
+  title: "Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2020, 0, 1),
+};
+const gradeOnlyAudit = buildAuditReport("JUL-2026", filters, gradeOnlyData, countryToRegion, new Date(2026, 6, 16));
+if (
+  gradeOnlyAudit.rows[0]?.auditSubcategory !== "Promotion - No Variable Change" ||
+  gradeOnlyAudit.expectations.length !== 1 ||
+  gradeOnlyAudit.expectations[0]?.fieldKey !== "jobGrade" ||
+  gradeOnlyAudit.expectations[0]?.rule !== "unverifiable"
+) {
+  throw new Error("A grade-only promotion was not audited with an unverifiable People follow-up expectation.");
+}
+const gradeOnlyVerification = buildFollowUpVerification(
+  gradeOnlyAudit.expectations,
+  gradeOnlyData.peopleById,
+  new Date(2026, 6, 22),
+);
+if (gradeOnlyVerification.rows[0]?.progressStatus !== "Not Verifiable") {
+  throw new Error("A grade-only promotion did not remain Not Verifiable in the People-only follow-up.");
+}
+
+const transferEmployeeId = "000085";
+const transferData = createEmptyAppData();
+transferData.currentScrById[transferEmployeeId] = scr(
+  transferEmployeeId,
+  new Date(2020, 0, 1),
+  "Transfer Employee",
+);
+const transferAudit = buildAuditReport("JUL-2026", filters, transferData, countryToRegion, new Date(2026, 6, 16));
+assertColumnGuide(buildAuditWorkbook(transferAudit.rows, {}), "Audit Report");
+const transferRows = transferAudit.rows.filter((row) => row.employeeId === transferEmployeeId);
+if (
+  transferRows.length !== 1 ||
+  transferRows[0]?.auditItem !== "Transfer to Sales - Xactly Setup Required" ||
+  transferRows[0]?.missingPeopleSetup !== "Yes" ||
+  transferRows[0]?.missingPositionSetup !== "Yes"
+) {
+  throw new Error("Transfer to Sales and Missing Xactly Setup were not merged into one audit action.");
+}
+if (new Set(transferAudit.expectations.map((item) => item.verificationId)).size !== 1) {
+  throw new Error("Merged Transfer to Sales audit did not produce one verification action.");
+}
+
+const historicalTransferEmployeeId = "000101";
+const historicalTransferData = createEmptyAppData();
+historicalTransferData.currentScrById[historicalTransferEmployeeId] = scr(
+  historicalTransferEmployeeId,
+  new Date(2020, 0, 1),
+  "Historical Transfer Employee",
+);
+for (const peerEmployeeId of ["000102", "000103"]) {
+  const peerScr = scr(peerEmployeeId, new Date(2020, 0, 1), `Peer Employee ${peerEmployeeId}`);
+  historicalTransferData.currentScrById[peerEmployeeId] = peerScr;
+  historicalTransferData.previousScrById[peerEmployeeId] = peerScr;
+  historicalTransferData.peopleById[peerEmployeeId] = {
+    ...people,
+    employeeId: peerEmployeeId,
+    fullName: `Peer Employee ${peerEmployeeId}`,
+    analystName: "New Analyst",
+  };
+}
+historicalTransferData.peopleById[historicalTransferEmployeeId] = {
+  ...people,
+  employeeId: historicalTransferEmployeeId,
+  fullName: "Historical Transfer Employee",
+  analystName: "Old Analyst",
+};
+historicalTransferData.positionById[historicalTransferEmployeeId] = {
+  employeeId: historicalTransferEmployeeId,
+  positionName: "Historical Transfer Employee (000101)",
+  personName: "Historical Transfer Employee (000101)",
+  title: "Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2020, 0, 1),
+};
+const historicalTransferAudit = buildAuditReport(
+  "JUL-2026",
+  filters,
+  historicalTransferData,
+  countryToRegion,
+  new Date(2026, 6, 16),
+);
+const historicalTransferRow = historicalTransferAudit.rows.find(
+  (row) => row.employeeId === historicalTransferEmployeeId,
+);
+const historicalTransferExpectation = historicalTransferAudit.expectations.find(
+  (item) => item.employeeId === historicalTransferEmployeeId,
+);
+if (
+  historicalTransferRow?.auditItem !== "Transfer to Sales" ||
+  historicalTransferRow.analystName !== "New Analyst" ||
+  historicalTransferExpectation?.analystName !== "New Analyst" ||
+  historicalTransferExpectation.analystSource !== "Inferred: Country + LOB" ||
+  historicalTransferExpectation.analystSampleSize !== 2
+) {
+  throw new Error("Transfer to Sales reused the employee's historical People Analyst instead of inferring ownership.");
+}
+const historicalTransferVerification = buildFollowUpVerification(
+  historicalTransferAudit.expectations,
+  historicalTransferData.peopleById,
+  new Date(2026, 6, 29),
+);
+const historicalTransferDashboard = buildDashboardModel(
+  historicalTransferData.currentScrById,
+  historicalTransferData.peopleById,
+  historicalTransferVerification.rows,
+  countryToRegion,
+);
+if (
+  historicalTransferDashboard.byAnalyst.find((row) => row.label === "New Analyst")?.employees !== 3 ||
+  historicalTransferDashboard.byAnalyst.some((row) => row.label === "Old Analyst" && row.employees > 0)
+) {
+  throw new Error("Dashboard reused the historical People Analyst for a Transfer to Sales employee.");
+}
+
+const loaEmployeeId = "000086";
+const loaData = createEmptyAppData();
+const loaCurrent = {
+  ...scr(loaEmployeeId, new Date(2020, 0, 1), "LOA Employee"),
+  supervisoryManager: "New Manager (222222)",
+};
+const loaPrevious = {
+  ...loaCurrent,
+  onLeave: "Yes",
+  supervisoryManager: "Old Manager (111111)",
+};
+loaData.currentScrById[loaEmployeeId] = loaCurrent;
+loaData.previousScrById[loaEmployeeId] = loaPrevious;
+loaData.peopleById[loaEmployeeId] = {
+  ...people,
+  employeeId: loaEmployeeId,
+  fullName: "LOA Employee",
+  firstName: "LOA",
+  lastName: "Employee",
+  businessUnit: "Sales Solutions",
+  employeeStatus: "LOA",
+  level1Manager: loaPrevious.supervisoryManager,
+};
+loaData.positionById[loaEmployeeId] = {
+  employeeId: loaEmployeeId,
+  positionName: "LOA Employee (000086)",
+  personName: "LOA Employee (000086)",
+  title: "Account Executive",
+  businessGroup: "Sales",
+  effectiveStartDate: new Date(2020, 0, 1),
+};
+loaData.loaById[loaEmployeeId] = {
+  employeeId: loaEmployeeId,
+  region: "APAC",
+  firstDayOfLeave: new Date(2026, 5, 1),
+  estimatedLastDayOfLeave: new Date(2026, 6, 15),
+  totalDaysOnLeave: "45",
+  dateTimeCompleted: null,
+  latestCorrection: null,
+};
+const loaAudit = buildAuditReport("JUL-2026", filters, loaData, countryToRegion, new Date(2026, 6, 16));
+const loaRows = loaAudit.rows.filter((row) => row.employeeId === loaEmployeeId);
+if (loaRows.length !== 1 || loaRows[0]?.auditItem !== "LOA Return with Participant Changes") {
+  throw new Error("LOA Return and participant changes were not merged into one audit action.");
+}
+const loaFieldKeys = new Set(loaAudit.expectations.map((item) => item.fieldKey));
+if (!loaFieldKeys.has("level1Manager") || !loaFieldKeys.has("employeeStatus")) {
+  throw new Error("Merged LOA Return verification did not retain change and status expectations.");
+}
+
+const transferFollowUpPeople: PeopleRecord = {
+  ...people,
+  employeeId: transferEmployeeId,
+  fullName: "Transfer Employee",
+  firstName: "Transfer",
+  lastName: "Employee",
+  businessUnit: "Sales Solutions",
+  level1Manager: "Manager (123456)",
+};
+const loaFollowUpPeople: PeopleRecord = {
+  ...loaData.peopleById[loaEmployeeId],
+  employeeStatus: "Active",
+  level1Manager: loaCurrent.supervisoryManager,
+  uploadDate: new Date(2026, 6, 29),
+};
+const mergedVerification = buildFollowUpVerification(
+  [...transferAudit.expectations, ...loaAudit.expectations],
+  { [transferEmployeeId]: transferFollowUpPeople, [loaEmployeeId]: loaFollowUpPeople },
+  new Date(2026, 6, 29),
+);
+const mergedDashboard = buildDashboardModel(
+  {
+    [transferEmployeeId]: transferData.currentScrById[transferEmployeeId],
+    [loaEmployeeId]: loaData.currentScrById[loaEmployeeId],
+  },
+  { [transferEmployeeId]: transferFollowUpPeople, [loaEmployeeId]: loaFollowUpPeople },
+  mergedVerification.rows,
+  countryToRegion,
+  "APAC",
+);
+if (mergedVerification.rows.length !== 2 || mergedDashboard.setupRequired !== 2) {
+  throw new Error("Dashboard did not count merged audit combinations as one setup action per employee.");
+}
+
+console.log("Follow-up verification smoke test passed.");
